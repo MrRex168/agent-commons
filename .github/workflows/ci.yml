@@ -9,6 +9,23 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: agent_commons
+          POSTGRES_PASSWORD: agent_commons
+          POSTGRES_DB: agent_commons_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agent_commons -d agent_commons_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      AGENT_COMMONS_DATABASE_URL: postgresql+psycopg://agent_commons:agent_commons@localhost:5432/agent_commons_test
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4

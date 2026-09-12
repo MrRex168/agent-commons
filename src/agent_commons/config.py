@@ -4,6 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "Agent Commons"
     environment: str = "development"
+    database_url: str = "postgresql+psycopg://agent_commons:agent_commons@localhost:5432/agent_commons"
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="AGENT_COMMONS_")
 
