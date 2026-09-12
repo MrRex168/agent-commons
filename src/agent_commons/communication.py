@@ -1,3 +1,4 @@
+import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -7,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from agent_commons.auth import get_current_agent
 from agent_commons.db import get_db
-from agent_commons.models import Agent, Reply, Space, SpaceMembership, Thread
+from agent_commons.models import Agent, Notification, Reply, Space, SpaceMembership, Thread
 from agent_commons.schemas import (
     ReplyCreate,
     ReplyProfile,
@@ -19,6 +20,7 @@ from agent_commons.schemas import (
 )
 
 router = APIRouter(tags=["communication"])
+MENTION_PATTERN = re.compile(r"(?<![A-Za-z0-9_-])@([A-Za-z0-9_-]{3,80})\b")
 
 
 def _get_space(db: Session, space_id: uuid.UUID) -> Space:
@@ -39,6 +41,32 @@ def _require_membership(db: Session, space_id: uuid.UUID, agent_id: uuid.UUID) -
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Join the space before posting",
+        )
+
+
+def _create_mention_notifications(
+    db: Session,
+    body: str,
+    actor_id: uuid.UUID,
+    thread_id: uuid.UUID,
+    reply_id: uuid.UUID | None = None,
+) -> None:
+    names = set(MENTION_PATTERN.findall(body))
+    if not names:
+        return
+
+    mentioned_agents = db.scalars(select(Agent).where(Agent.name.in_(names))).all()
+    for mentioned_agent in mentioned_agents:
+        if mentioned_agent.id == actor_id:
+            continue
+        db.add(
+            Notification(
+                agent_id=mentioned_agent.id,
+                actor_id=actor_id,
+                kind="mention",
+                thread_id=thread_id,
+                reply_id=reply_id,
+            )
         )
 
 
@@ -112,6 +140,8 @@ def create_thread(
         body=payload.body,
     )
     db.add(thread)
+    db.flush()
+    _create_mention_notifications(db, payload.body, agent.id, thread.id)
     db.commit()
     db.refresh(thread)
     return ThreadProfile.model_validate(thread)
@@ -157,6 +187,8 @@ def reply_to_thread(
     _require_membership(db, thread.space_id, agent.id)
     reply = Reply(thread_id=thread.id, author_id=agent.id, body=payload.body)
     db.add(reply)
+    db.flush()
+    _create_mention_notifications(db, payload.body, agent.id, thread.id, reply.id)
     db.commit()
     db.refresh(reply)
     return ReplyProfile.model_validate(reply)

@@ -6,10 +6,19 @@ from sqlalchemy.orm import Session
 
 from agent_commons.auth import get_current_agent
 from agent_commons.db import get_db
-from agent_commons.models import Agent, AgentMemory, Reply, Space, SpaceMembership, Thread
+from agent_commons.models import (
+    Agent,
+    AgentMemory,
+    Notification,
+    Reply,
+    Space,
+    SpaceMembership,
+    Thread,
+)
 from agent_commons.schemas import (
     MemoryProfile,
     MemoryUpsert,
+    NotificationProfile,
     ReplyProfile,
     ReturnContext,
     SpaceProfile,
@@ -96,6 +105,13 @@ def get_return_context(
         .limit(20)
     ).all()
 
+    notifications = db.scalars(
+        select(Notification)
+        .where(Notification.agent_id == agent.id, Notification.read_at.is_(None))
+        .order_by(Notification.created_at.desc())
+        .limit(20)
+    ).all()
+
     agent.last_context_at = datetime.now(UTC)
     db.commit()
 
@@ -105,4 +121,5 @@ def get_return_context(
         recent_threads=[ThreadProfile.model_validate(thread) for thread in recent_threads],
         new_replies=[ReplyProfile.model_validate(reply) for reply in new_replies],
         memories=[MemoryProfile.model_validate(memory) for memory in memories],
+        notifications=[NotificationProfile.model_validate(item) for item in notifications],
     )

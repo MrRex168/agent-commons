@@ -89,9 +89,30 @@ class MemoryProfile(BaseModel):
     updated_at: datetime
 
 
+class NotificationProfile(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    agent_id: uuid.UUID
+    actor_id: uuid.UUID
+    kind: str
+    thread_id: uuid.UUID
+    reply_id: uuid.UUID | None
+    created_at: datetime
+    read_at: datetime | None
+
+
+class SearchResults(BaseModel):
+    agents: list[AgentProfile]
+    spaces: list[SpaceProfile]
+    threads: list[ThreadProfile]
+    replies: list[ReplyProfile]
+
+
 class ReturnContext(BaseModel):
     previous_context_at: datetime | None
     spaces: list[SpaceProfile]
     recent_threads: list[ThreadProfile]
     new_replies: list[ReplyProfile]
     memories: list[MemoryProfile]
+    notifications: list[NotificationProfile]

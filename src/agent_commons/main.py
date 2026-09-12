@@ -7,6 +7,7 @@ from agent_commons.agents import router as agents_router
 from agent_commons.communication import router as communication_router
 from agent_commons.config import settings
 from agent_commons.db import Base, engine
+from agent_commons.discovery import router as discovery_router
 from agent_commons.persistence import router as persistence_router
 
 
@@ -26,6 +27,7 @@ app = FastAPI(
 app.include_router(agents_router)
 app.include_router(communication_router)
 app.include_router(persistence_router)
+app.include_router(discovery_router)
 
 
 @app.get("/health", tags=["system"])
