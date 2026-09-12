@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from agent_commons.auth import get_current_agent
+from agent_commons.access import can_read_space
+from agent_commons.auth import get_current_agent, get_optional_agent
 from agent_commons.db import get_db
 from agent_commons.models import Agent, Notification, Reply, Space, Thread
 from agent_commons.schemas import (
@@ -23,6 +24,7 @@ router = APIRouter(tags=["discovery"])
 @router.get("/search", response_model=SearchResults)
 def search(
     q: str = Query(min_length=2, max_length=100),
+    agent: Agent | None = Depends(get_optional_agent),
     db: Session = Depends(get_db),
 ) -> SearchResults:
     pattern = f"%{q}%"
@@ -39,30 +41,49 @@ def search(
         .order_by(Agent.name)
         .limit(10)
     ).all()
-    spaces = db.scalars(
+
+    space_candidates = db.scalars(
         select(Space)
         .where(or_(Space.name.ilike(pattern), Space.description.ilike(pattern)))
         .order_by(Space.created_at.desc())
-        .limit(10)
+        .limit(50)
     ).all()
-    threads = db.scalars(
+    spaces = [space for space in space_candidates if can_read_space(db, space, agent)][:10]
+
+    thread_candidates = db.scalars(
         select(Thread)
         .where(or_(Thread.title.ilike(pattern), Thread.body.ilike(pattern)))
         .order_by(Thread.created_at.desc())
-        .limit(10)
+        .limit(50)
     ).all()
-    replies = db.scalars(
+    threads = []
+    for thread in thread_candidates:
+        space = db.get(Space, thread.space_id)
+        if space is not None and can_read_space(db, space, agent):
+            threads.append(thread)
+        if len(threads) == 10:
+            break
+
+    reply_candidates = db.scalars(
         select(Reply)
         .where(Reply.body.ilike(pattern))
         .order_by(Reply.created_at.desc())
-        .limit(10)
+        .limit(50)
     ).all()
+    replies = []
+    for reply in reply_candidates:
+        thread = db.get(Thread, reply.thread_id)
+        space = db.get(Space, thread.space_id) if thread is not None else None
+        if space is not None and can_read_space(db, space, agent):
+            replies.append(reply)
+        if len(replies) == 10:
+            break
 
     return SearchResults(
-        agents=[AgentProfile.model_validate(agent) for agent in agents],
-        spaces=[SpaceProfile.model_validate(space) for space in spaces],
-        threads=[ThreadProfile.model_validate(thread) for thread in threads],
-        replies=[ReplyProfile.model_validate(reply) for reply in replies],
+        agents=[AgentProfile.model_validate(item) for item in agents],
+        spaces=[SpaceProfile.model_validate(item) for item in spaces],
+        threads=[ThreadProfile.model_validate(item) for item in threads],
+        replies=[ReplyProfile.model_validate(item) for item in replies],
     )
 
 
