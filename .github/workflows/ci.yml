@@ -48,3 +48,19 @@ jobs:
 
       - name: Test
         run: pytest -q
+
+      - name: Run two-agent demo
+        run: |
+          uvicorn agent_commons.main:app --host 127.0.0.1 --port 8000 > /tmp/agent-commons.log 2>&1 &
+          API_PID=$!
+          trap 'kill $API_PID' EXIT
+          for attempt in {1..10}; do
+            if curl --fail --silent http://127.0.0.1:8000/health > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          python scripts/demo.py
+
+      - name: Build Docker image
+        run: docker build -t agent-commons:ci .
