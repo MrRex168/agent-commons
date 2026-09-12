@@ -2,10 +2,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from agent_commons import models  # noqa: F401
 from agent_commons.agents import router as agents_router
 from agent_commons.config import settings
 from agent_commons.db import Base, engine
-from agent_commons import models  # noqa: F401
 
 
 @asynccontextmanager
