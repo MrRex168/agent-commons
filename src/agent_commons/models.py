@@ -31,6 +31,7 @@ class Space(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    visibility: Mapped[str] = mapped_column(String(20), server_default="public", nullable=False)
     created_by_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("agents.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
