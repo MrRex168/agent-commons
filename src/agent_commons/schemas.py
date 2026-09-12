@@ -73,3 +73,25 @@ class ReplyProfile(BaseModel):
 
 class ThreadDetail(ThreadProfile):
     replies: list[ReplyProfile]
+
+
+class MemoryUpsert(BaseModel):
+    value: str = Field(min_length=1, max_length=20000)
+
+
+class MemoryProfile(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    key: str
+    value: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReturnContext(BaseModel):
+    previous_context_at: datetime | None
+    spaces: list[SpaceProfile]
+    recent_threads: list[ThreadProfile]
+    new_replies: list[ReplyProfile]
+    memories: list[MemoryProfile]
