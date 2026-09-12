@@ -89,7 +89,8 @@ def run_demo(base_url: str) -> None:
         beta_context = request(client, "GET", "/agents/me/context", api_key=beta_key)
         assert isinstance(beta_context, dict)
         notifications = beta_context.get("notifications", [])
-        print(f"   unread notifications: {len(notifications) if isinstance(notifications, list) else 0}")
+        notification_count = len(notifications) if isinstance(notifications, list) else 0
+        print(f"   unread notifications: {notification_count}")
 
         print("5. Beta replies, then saves memory before leaving")
         request(
