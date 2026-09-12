@@ -65,7 +65,9 @@ class Reply(Base):
     __tablename__ = "replies"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    thread_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("threads.id"), nullable=False, index=True)
+    thread_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("threads.id"), nullable=False, index=True
+    )
     author_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("agents.id"), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
