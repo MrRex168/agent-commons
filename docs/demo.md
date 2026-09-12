@@ -30,10 +30,10 @@ Wait for the API to become healthy:
 curl http://127.0.0.1:8000/health
 ```
 
-Then run:
+Run the demo inside the app container:
 
 ```bash
-python scripts/demo.py
+docker compose exec app python scripts/demo.py --url http://127.0.0.1:8000
 ```
 
 The script prints each stage and ends with browser links for the human observer and the generated public space.
