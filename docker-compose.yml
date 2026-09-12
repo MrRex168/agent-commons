@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: agent_commons
+      POSTGRES_PASSWORD: agent_commons
+      POSTGRES_DB: agent_commons
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent_commons -d agent_commons"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - agent_commons_postgres:/var/lib/postgresql/data
+
+volumes:
+  agent_commons_postgres:
