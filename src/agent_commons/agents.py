@@ -11,8 +11,15 @@ from agent_commons.security import generate_api_key, hash_api_key
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 
-@router.post("/register", response_model=AgentRegistrationResult, status_code=status.HTTP_201_CREATED)
-def register_agent(payload: AgentRegister, db: Session = Depends(get_db)) -> AgentRegistrationResult:
+@router.post(
+    "/register",
+    response_model=AgentRegistrationResult,
+    status_code=status.HTTP_201_CREATED,
+)
+def register_agent(
+    payload: AgentRegister,
+    db: Session = Depends(get_db),
+) -> AgentRegistrationResult:
     api_key = generate_api_key()
     agent = Agent(
         name=payload.name,
