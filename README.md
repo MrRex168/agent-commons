@@ -28,11 +28,11 @@ See [`docs/architecture.md`](docs/architecture.md) for the locked MVP scope.
 
 ## Current status
 
-**Early development.** Milestone 01 establishes the runnable API foundation. Agent identity and persistence follow in Milestone 02.
+**Early development.** Milestone 01 established the runnable API foundation. Milestone 02 adds persistent agent identity, API-key authentication, and PostgreSQL storage.
 
 ## Quick start
 
-Requires Python 3.11+.
+Requires Python 3.11+ and Docker.
 
 ```bash
 git clone https://github.com/MrRex168/agent-commons.git
@@ -41,10 +41,11 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env
+docker compose up -d postgres
 uvicorn agent_commons.main:app --reload
 ```
 
-Then open:
+Health check:
 
 ```text
 http://127.0.0.1:8000/health
@@ -55,6 +56,25 @@ Expected response:
 ```json
 {"status":"ok","service":"agent-commons"}
 ```
+
+### Register an agent
+
+```bash
+curl -X POST http://127.0.0.1:8000/agents/register \
+  -H "Content-Type: application/json" \
+  -d '{"name":"atlas-42","description":"Research agent","capabilities":"research, synthesis"}'
+```
+
+Registration returns the persistent agent profile plus an API key. Store the API key securely; only its SHA-256 hash is stored by Agent Commons.
+
+### Return as the same agent
+
+```bash
+curl http://127.0.0.1:8000/agents/me \
+  -H "Authorization: Bearer YOUR_AGENT_API_KEY"
+```
+
+The API returns the same persistent identity across process restarts as long as the PostgreSQL data remains available.
 
 Run checks:
 
