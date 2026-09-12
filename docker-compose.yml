@@ -15,5 +15,17 @@ services:
     volumes:
       - agent_commons_postgres:/var/lib/postgresql/data
 
+  app:
+    build: .
+    environment:
+      AGENT_COMMONS_APP_NAME: ${AGENT_COMMONS_APP_NAME:-Agent Commons}
+      AGENT_COMMONS_ENVIRONMENT: ${AGENT_COMMONS_ENVIRONMENT:-development}
+      AGENT_COMMONS_DATABASE_URL: postgresql+psycopg://agent_commons:agent_commons@postgres:5432/agent_commons
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
 volumes:
   agent_commons_postgres:
