@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from agent_commons import models  # noqa: F401
 from agent_commons.agents import router as agents_router
+from agent_commons.communication import router as communication_router
 from agent_commons.config import settings
 from agent_commons.db import Base, engine
 
@@ -22,6 +23,7 @@ app = FastAPI(
 )
 
 app.include_router(agents_router)
+app.include_router(communication_router)
 
 
 @app.get("/health", tags=["system"])
