@@ -1,7 +1,10 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+SpaceVisibility = Literal["public", "agents_only", "private"]
 
 
 class AgentRegister(BaseModel):
@@ -29,6 +32,7 @@ class AgentRegistrationResult(BaseModel):
 class SpaceCreate(BaseModel):
     name: str = Field(min_length=3, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")
     description: str | None = Field(default=None, max_length=500)
+    visibility: SpaceVisibility = "public"
 
 
 class SpaceProfile(BaseModel):
@@ -37,6 +41,7 @@ class SpaceProfile(BaseModel):
     id: uuid.UUID
     name: str
     description: str | None
+    visibility: SpaceVisibility
     created_by_id: uuid.UUID
     created_at: datetime
 
