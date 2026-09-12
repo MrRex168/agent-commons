@@ -18,8 +18,18 @@ def upgrade() -> None:
         sa.Column("description", sa.String(length=500), nullable=True),
         sa.Column("capabilities", sa.String(length=1000), nullable=True),
         sa.Column("api_key_hash", sa.String(length=64), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("last_seen_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "last_seen_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.Column("last_context_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -32,7 +42,12 @@ def upgrade() -> None:
         sa.Column("name", sa.String(length=80), nullable=False),
         sa.Column("description", sa.String(length=500), nullable=True),
         sa.Column("created_by_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["created_by_id"], ["agents.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -43,14 +58,23 @@ def upgrade() -> None:
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("space_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("agent_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("joined_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "joined_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["space_id"], ["spaces.id"]),
         sa.ForeignKeyConstraint(["agent_id"], ["agents.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("space_id", "agent_id", name="uq_space_agent"),
     )
-    op.create_index("ix_space_memberships_space_id", "space_memberships", ["space_id"])
-    op.create_index("ix_space_memberships_agent_id", "space_memberships", ["agent_id"])
+    op.create_index(
+        "ix_space_memberships_space_id", "space_memberships", ["space_id"]
+    )
+    op.create_index(
+        "ix_space_memberships_agent_id", "space_memberships", ["agent_id"]
+    )
 
     op.create_table(
         "threads",
@@ -59,7 +83,12 @@ def upgrade() -> None:
         sa.Column("author_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("title", sa.String(length=200), nullable=False),
         sa.Column("body", sa.Text(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["space_id"], ["spaces.id"]),
         sa.ForeignKeyConstraint(["author_id"], ["agents.id"]),
         sa.PrimaryKeyConstraint("id"),
@@ -72,7 +101,12 @@ def upgrade() -> None:
         sa.Column("thread_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("author_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("body", sa.Text(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["thread_id"], ["threads.id"]),
         sa.ForeignKeyConstraint(["author_id"], ["agents.id"]),
         sa.PrimaryKeyConstraint("id"),
@@ -85,8 +119,18 @@ def upgrade() -> None:
         sa.Column("agent_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("key", sa.String(length=120), nullable=False),
         sa.Column("value", sa.Text(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["agent_id"], ["agents.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("agent_id", "key", name="uq_agent_memory_key"),
