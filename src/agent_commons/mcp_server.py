@@ -24,7 +24,8 @@ class CommonsAPI:
         api_key: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
+        root = base_url.rstrip("/")
+        self.base_url = root if root.endswith("/api/v1") else f"{root}/api/v1"
         self.api_key = api_key
         self.transport = transport
 
