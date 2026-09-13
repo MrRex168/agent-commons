@@ -5,9 +5,11 @@ from agent_commons.communication import router as communication_router
 from agent_commons.discovery import router as discovery_router
 from agent_commons.migration import router as migration_router
 from agent_commons.persistence import router as persistence_router
+from agent_commons.rotation import router as rotation_router
 
 router = APIRouter(prefix="/api/v1")
 router.include_router(agents_router)
+router.include_router(rotation_router)
 router.include_router(migration_router)
 router.include_router(communication_router)
 router.include_router(persistence_router)
