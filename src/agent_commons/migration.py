@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from agent_commons.config import settings
 from agent_commons.db import get_db
+from agent_commons.freshness_models import AgentStateSequence, ObservedStateFreshness
 from agent_commons.identity_crypto import identity_fingerprint, verify_identity_signature
 from agent_commons.migration_models import AgentMigrationChallenge
 from agent_commons.models import Agent, AgentCryptographicIdentity, AgentMemory
@@ -25,7 +26,7 @@ from agent_commons.schemas import (
     SignedPortableStateEnvelope,
 )
 from agent_commons.security import generate_api_key, hash_api_key
-from agent_commons.state_serialization import parse_state_payload
+from agent_commons.state_serialization import parse_state_payload_details
 
 router = APIRouter(prefix="/agents", tags=["agent-migration"])
 MIGRATION_CHALLENGE_TTL = timedelta(minutes=5)
@@ -41,10 +42,12 @@ def _envelope_digest(envelope: SignedPortableStateEnvelope) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _validate_envelope(envelope: SignedPortableStateEnvelope) -> PortableAgentState:
+def _validate_envelope(
+    envelope: SignedPortableStateEnvelope,
+) -> tuple[PortableAgentState, int | None]:
     try:
         expected_fingerprint = identity_fingerprint(envelope.public_key_multibase)
-        payload_fingerprint, state = parse_state_payload(envelope.payload)
+        parsed = parse_state_payload_details(envelope.payload)
         valid = verify_identity_signature(
             envelope.public_key_multibase,
             envelope.payload,
@@ -61,17 +64,61 @@ def _validate_envelope(envelope: SignedPortableStateEnvelope) -> PortableAgentSt
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Envelope fingerprint does not match its public key",
         )
-    if payload_fingerprint != envelope.fingerprint:
+    if parsed.fingerprint != envelope.fingerprint:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Payload fingerprint does not match the envelope",
+        )
+    if parsed.version == 2:
+        if envelope.version != 2 or envelope.state_sequence != parsed.state_sequence:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Envelope freshness metadata does not match the signed payload",
+            )
+    elif envelope.version != 1 or envelope.state_sequence is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Legacy envelope metadata does not match the signed payload",
         )
     if not valid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid signed state signature",
         )
-    return state
+    return parsed.state, parsed.state_sequence
+
+
+def _enforce_freshness(
+    fingerprint: str,
+    state_sequence: int | None,
+    db: Session,
+) -> None:
+    observed = db.get(ObservedStateFreshness, fingerprint)
+    if state_sequence is None:
+        if observed is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Legacy signed state cannot replace a newer freshness-aware state",
+            )
+        return
+
+    if observed is not None and state_sequence < observed.highest_sequence:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Signed state rollback detected: destination has already observed "
+                f"sequence {observed.highest_sequence}"
+            ),
+        )
+    if observed is None:
+        db.add(
+            ObservedStateFreshness(
+                root_fingerprint=fingerprint,
+                highest_sequence=state_sequence,
+            )
+        )
+    elif state_sequence > observed.highest_sequence:
+        observed.highest_sequence = state_sequence
 
 
 def _migration_payload(
@@ -129,7 +176,8 @@ def create_migration_challenge(
     request: MigrationChallengeRequest,
     db: Session = Depends(get_db),
 ) -> MigrationChallengeResponse:
-    state = _validate_envelope(request.envelope)
+    state, state_sequence = _validate_envelope(request.envelope)
+    _enforce_freshness(request.envelope.fingerprint, state_sequence, db)
     requested_name = request.requested_name or state.identity.name
     _ensure_destination_available(request.envelope.fingerprint, requested_name, db)
 
@@ -188,7 +236,7 @@ def complete_migration(
             detail="Migration challenge has expired",
         )
 
-    state = _validate_envelope(request.envelope)
+    state, state_sequence = _validate_envelope(request.envelope)
     if request.envelope.fingerprint != challenge.fingerprint:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -222,6 +270,7 @@ def complete_migration(
             detail="Invalid migration ownership proof",
         )
 
+    _enforce_freshness(challenge.fingerprint, state_sequence, db)
     _ensure_destination_available(challenge.fingerprint, challenge.requested_name, db)
 
     api_key = generate_api_key()
@@ -251,6 +300,8 @@ def complete_migration(
         )
         db.add(cryptographic_identity)
         db.add(profile)
+        if state_sequence is not None:
+            db.add(AgentStateSequence(agent_id=agent.id, sequence=state_sequence))
         for portable_memory in state.memories:
             db.add(
                 AgentMemory(
@@ -277,4 +328,5 @@ def complete_migration(
         api_key=api_key,
         memories_restored=len(state.memories),
         source_name=state.identity.name,
+        state_sequence=state_sequence,
     )
