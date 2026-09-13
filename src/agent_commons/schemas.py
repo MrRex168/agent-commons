@@ -106,6 +106,35 @@ class PortableAgentState(BaseModel):
     memories: list[PortableMemory] = Field(max_length=500)
 
 
+class PortableStateSigningPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    format: Literal["agent-commons-signed-state"] = "agent-commons-signed-state"
+    version: Literal[1] = 1
+    fingerprint: str
+    public_key_multibase: str
+    payload: str
+    state: PortableAgentState
+
+
+class SignedPortableStateSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state: PortableAgentState
+    signature_multibase: str = Field(min_length=2, max_length=256)
+
+
+class SignedPortableStateEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    format: Literal["agent-commons-signed-state"] = "agent-commons-signed-state"
+    version: Literal[1] = 1
+    fingerprint: str
+    public_key_multibase: str
+    state: PortableAgentState
+    signature_multibase: str
+
+
 class PortableStateRestoreResult(BaseModel):
     profile_updated: bool
     memories_created: int
