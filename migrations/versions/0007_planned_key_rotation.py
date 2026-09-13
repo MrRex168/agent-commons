@@ -1,7 +1,7 @@
 """planned key rotation
 
 Revision ID: 0007_planned_key_rotation
-Revises: 0006_agent_migration_challenges
+Revises: 0006_cross_instance_migration
 """
 
 import sqlalchemy as sa
@@ -9,7 +9,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "0007_planned_key_rotation"
-down_revision = "0006_agent_migration_challenges"
+down_revision = "0006_cross_instance_migration"
 branch_labels = None
 depends_on = None
 
