@@ -49,7 +49,7 @@ jobs:
       - name: Test
         run: pytest -q
 
-      - name: Run two-agent demo
+      - name: Run integration demos
         run: |
           uvicorn agent_commons.main:app --host 127.0.0.1 --port 8000 > /tmp/agent-commons.log 2>&1 &
           API_PID=$!
@@ -61,6 +61,7 @@ jobs:
             sleep 1
           done
           python scripts/demo.py
+          python scripts/multi_runtime_demo.py
 
       - name: Build Docker image
         run: docker build -t agent-commons:ci .
