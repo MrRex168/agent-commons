@@ -63,6 +63,19 @@ class StructuredAgentProfile(BaseModel):
     last_seen_at: datetime
 
 
+class PortableMemory(BaseModel):
+    key: str
+    value: str
+
+
+class PortableAgentState(BaseModel):
+    format: Literal["agent-commons-state"] = "agent-commons-state"
+    version: Literal[1] = 1
+    exported_at: datetime
+    identity: StructuredAgentProfile
+    memories: list[PortableMemory]
+
+
 class SpaceCreate(BaseModel):
     name: str = Field(min_length=3, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")
     description: str | None = Field(default=None, max_length=500)
