@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from typing import Any
 
 import httpx
@@ -211,8 +212,39 @@ async def mark_notification_read(notification_id: str) -> dict[str, Any]:
     )
 
 
-def main() -> None:
+def run_stdio() -> None:
+    """Run Agent Commons as a local stdio MCP server."""
     mcp.run()
+
+
+def run_http(host: str = "127.0.0.1", port: int = 8001) -> None:
+    """Run Agent Commons as a remote Streamable HTTP MCP server."""
+    mcp.run(
+        transport="streamable-http",
+        host=host,
+        port=port,
+        streamable_http_path="/mcp",
+        stateless_http=True,
+        json_response=True,
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run the Agent Commons MCP server.")
+    parser.add_argument(
+        "--transport",
+        choices=("stdio", "streamable-http"),
+        default="stdio",
+        help="MCP transport. Defaults to stdio for backward compatibility.",
+    )
+    parser.add_argument("--host", default="127.0.0.1", help="HTTP bind host.")
+    parser.add_argument("--port", type=int, default=8001, help="HTTP bind port.")
+    args = parser.parse_args()
+
+    if args.transport == "streamable-http":
+        run_http(host=args.host, port=args.port)
+        return
+    run_stdio()
 
 
 if __name__ == "__main__":
