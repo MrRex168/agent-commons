@@ -1,6 +1,7 @@
 import hashlib
 import json
 import secrets
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,7 +12,7 @@ from sqlalchemy.orm import Session
 from agent_commons.config import settings
 from agent_commons.db import get_db
 from agent_commons.freshness_models import AgentStateSequence
-from agent_commons.identity_crypto import verify_identity_signature
+from agent_commons.identity_crypto import identity_fingerprint, verify_identity_signature
 from agent_commons.lineage import PortableIdentityLineage, verify_lineage
 from agent_commons.migration import (
     _enforce_freshness,
@@ -21,7 +22,8 @@ from agent_commons.migration import (
 from agent_commons.migration_models import AgentMigrationChallenge
 from agent_commons.models import Agent, AgentCryptographicIdentity, AgentMemory
 from agent_commons.profile_models import AgentStructuredProfile
-from agent_commons.rotation_models import AgentIdentityKeyState
+from agent_commons.recovery_models import AgentRecoveryPolicy, AgentRecoveryTransition
+from agent_commons.rotation_models import AgentIdentityKeyState, AgentKeyTransition
 from agent_commons.schemas import (
     AgentCryptographicIdentityProfile,
     AgentProfile,
@@ -47,7 +49,7 @@ class LineageMigrationChallengeRequest(BaseModel):
 
 
 class LineageMigrationCompleteRequest(BaseModel):
-    challenge_id: str
+    challenge_id: uuid.UUID
     envelope: SignedPortableStateEnvelope
     lineage: PortableIdentityLineage
     signature_multibase: str = Field(min_length=2, max_length=256)
@@ -101,6 +103,78 @@ def _verify_package(envelope: SignedPortableStateEnvelope, lineage: PortableIden
     if envelope.public_key_multibase != lineage.root_public_key_multibase:
         raise HTTPException(status_code=409, detail="State root key does not match lineage")
     return state, state_sequence, verified
+
+
+def _persist_lineage(
+    agent_id: uuid.UUID,
+    lineage: PortableIdentityLineage,
+    now: datetime,
+    db: Session,
+) -> None:
+    db.add(
+        AgentIdentityKeyState(
+            agent_id=agent_id,
+            root_public_key_multibase=lineage.root_public_key_multibase,
+            root_fingerprint=lineage.root_fingerprint,
+            current_public_key_multibase=lineage.current_public_key_multibase,
+            sequence=lineage.sequence,
+        )
+    )
+
+    for item in lineage.transitions:
+        if item.type == "rotation":
+            if item.previous_signature_multibase is None:
+                raise HTTPException(status_code=422, detail="Incomplete rotation lineage")
+            db.add(
+                AgentKeyTransition(
+                    agent_id=agent_id,
+                    sequence=item.sequence,
+                    previous_public_key_multibase=item.previous_public_key_multibase,
+                    new_public_key_multibase=item.new_public_key_multibase,
+                    payload=item.payload,
+                    previous_signature_multibase=item.previous_signature_multibase,
+                    new_signature_multibase=item.new_signature_multibase,
+                    created_at=now,
+                )
+            )
+        else:
+            if (
+                item.policy_revision is None
+                or item.recovery_public_key_multibase is None
+                or item.recovery_signature_multibase is None
+            ):
+                raise HTTPException(status_code=422, detail="Incomplete recovery lineage")
+            db.add(
+                AgentRecoveryTransition(
+                    agent_id=agent_id,
+                    sequence=item.sequence,
+                    policy_revision=item.policy_revision,
+                    previous_public_key_multibase=item.previous_public_key_multibase,
+                    new_public_key_multibase=item.new_public_key_multibase,
+                    recovery_public_key_multibase=item.recovery_public_key_multibase,
+                    payload=item.payload,
+                    recovery_signature_multibase=item.recovery_signature_multibase,
+                    new_signature_multibase=item.new_signature_multibase,
+                    created_at=now,
+                )
+            )
+
+    if lineage.recovery_policy is not None:
+        policy = lineage.recovery_policy
+        db.add(
+            AgentRecoveryPolicy(
+                agent_id=agent_id,
+                recovery_public_key_multibase=policy.recovery_public_key_multibase,
+                recovery_fingerprint=identity_fingerprint(
+                    policy.recovery_public_key_multibase
+                ),
+                revision=policy.revision,
+                statement_payload=policy.payload,
+                active_signature_multibase=policy.active_signature_multibase,
+                recovery_signature_multibase=policy.recovery_signature_multibase,
+                updated_at=now,
+            )
+        )
 
 
 @router.post("/migrate/lineage/challenge", response_model=MigrationChallengeResponse)
@@ -196,15 +270,7 @@ def complete_lineage_migration(
             verified_at=now,
         )
         db.add(identity)
-        db.add(
-            AgentIdentityKeyState(
-                agent_id=agent.id,
-                root_public_key_multibase=request.lineage.root_public_key_multibase,
-                root_fingerprint=request.lineage.root_fingerprint,
-                current_public_key_multibase=request.lineage.current_public_key_multibase,
-                sequence=request.lineage.sequence,
-            )
-        )
+        _persist_lineage(agent.id, request.lineage, now, db)
         db.add(
             AgentStructuredProfile(
                 agent_id=agent.id,
