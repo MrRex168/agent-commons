@@ -19,7 +19,10 @@ from agent_commons.security import generate_api_key, hash_api_key
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 
-def _structured_profile(agent: Agent, profile: AgentStructuredProfile | None) -> StructuredAgentProfile:
+def _structured_profile(
+    agent: Agent,
+    profile: AgentStructuredProfile | None,
+) -> StructuredAgentProfile:
     return StructuredAgentProfile(
         id=agent.id,
         name=agent.name,
