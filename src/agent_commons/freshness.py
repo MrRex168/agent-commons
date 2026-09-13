@@ -137,11 +137,23 @@ def verify_fresh_signed_state(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if parsed.version != 2 or parsed.state_sequence is None:
-        raise HTTPException(status_code=422, detail="Envelope does not contain freshness metadata")
+        raise HTTPException(
+            status_code=422,
+            detail="Envelope does not contain freshness metadata",
+        )
     if envelope.version != 2 or envelope.state_sequence != parsed.state_sequence:
-        raise HTTPException(status_code=422, detail="Envelope freshness metadata does not match payload")
-    if envelope.fingerprint != expected_fingerprint or parsed.fingerprint != envelope.fingerprint:
-        raise HTTPException(status_code=422, detail="Envelope identity does not match payload or key")
+        raise HTTPException(
+            status_code=422,
+            detail="Envelope freshness metadata does not match payload",
+        )
+    if (
+        envelope.fingerprint != expected_fingerprint
+        or parsed.fingerprint != envelope.fingerprint
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Envelope identity does not match payload or key",
+        )
 
     return SignedPortableStateVerification(
         valid=valid,
