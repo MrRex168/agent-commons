@@ -28,10 +28,15 @@ from agent_commons.schemas import (
     PortableAgentState,
     PortableMemory,
     PortableStateRestoreResult,
+    PortableStateSigningPayload,
+    SignedPortableStateEnvelope,
+    SignedPortableStateSubmission,
+    SignedPortableStateVerification,
     StructuredAgentProfile,
     StructuredAgentProfileUpdate,
 )
 from agent_commons.security import generate_api_key, hash_api_key
+from agent_commons.state_serialization import canonical_state_payload, parse_state_payload
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 IDENTITY_CHALLENGE_TTL = timedelta(minutes=5)
@@ -52,6 +57,20 @@ def _structured_profile(
         runtime=profile.runtime if profile else None,
         created_at=agent.created_at,
         last_seen_at=agent.last_seen_at,
+    )
+
+
+def _portable_state(agent: Agent, db: Session) -> PortableAgentState:
+    profile = db.get(AgentStructuredProfile, agent.id)
+    memories = db.scalars(
+        select(AgentMemory)
+        .where(AgentMemory.agent_id == agent.id)
+        .order_by(AgentMemory.created_at, AgentMemory.key)
+    ).all()
+    return PortableAgentState(
+        exported_at=datetime.now(UTC),
+        identity=_structured_profile(agent, profile),
+        memories=[PortableMemory(key=item.key, value=item.value) for item in memories],
     )
 
 
@@ -308,16 +327,119 @@ def export_my_state(
     db: Session = Depends(get_db),
 ) -> PortableAgentState:
     """Export portable identity metadata and agent-owned memories without credentials."""
-    profile = db.get(AgentStructuredProfile, agent.id)
-    memories = db.scalars(
-        select(AgentMemory)
-        .where(AgentMemory.agent_id == agent.id)
-        .order_by(AgentMemory.created_at, AgentMemory.key)
-    ).all()
-    return PortableAgentState(
-        exported_at=datetime.now(UTC),
-        identity=_structured_profile(agent, profile),
-        memories=[PortableMemory(key=item.key, value=item.value) for item in memories],
+    return _portable_state(agent, db)
+
+
+@router.get("/me/state/signing-payload", response_model=PortableStateSigningPayload)
+def export_state_signing_payload(
+    agent: Agent = Depends(get_current_agent),
+    db: Session = Depends(get_db),
+) -> PortableStateSigningPayload:
+    identity = db.get(AgentCryptographicIdentity, agent.id)
+    if identity is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Bind a cryptographic identity before creating a signed state export",
+        )
+    state = _portable_state(agent, db)
+    return PortableStateSigningPayload(
+        fingerprint=identity.fingerprint,
+        public_key_multibase=identity.public_key_multibase,
+        payload=canonical_state_payload(state, identity.fingerprint),
+        state=state,
+    )
+
+
+@router.post("/me/state/signed-export", response_model=SignedPortableStateEnvelope)
+def create_signed_state_export(
+    submission: SignedPortableStateSubmission,
+    agent: Agent = Depends(get_current_agent),
+    db: Session = Depends(get_db),
+) -> SignedPortableStateEnvelope:
+    identity = db.get(AgentCryptographicIdentity, agent.id)
+    if identity is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cryptographic identity not bound",
+        )
+
+    try:
+        fingerprint, state = parse_state_payload(submission.payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    if fingerprint != identity.fingerprint:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Signed state fingerprint does not match the authenticated agent",
+        )
+    if state.identity.id != agent.id or state.identity.name != agent.name:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Signed state identity does not match the authenticated agent",
+        )
+
+    try:
+        valid = verify_identity_signature(
+            identity.public_key_multibase,
+            submission.payload,
+            submission.signature_multibase,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    if not valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid signed state signature",
+        )
+
+    return SignedPortableStateEnvelope(
+        fingerprint=identity.fingerprint,
+        public_key_multibase=identity.public_key_multibase,
+        payload=submission.payload,
+        signature_multibase=submission.signature_multibase,
+    )
+
+
+@router.post("/state/verify", response_model=SignedPortableStateVerification)
+def verify_signed_state(
+    envelope: SignedPortableStateEnvelope,
+) -> SignedPortableStateVerification:
+    try:
+        expected_fingerprint = identity_fingerprint(envelope.public_key_multibase)
+        payload_fingerprint, state = parse_state_payload(envelope.payload)
+        valid = verify_identity_signature(
+            envelope.public_key_multibase,
+            envelope.payload,
+            envelope.signature_multibase,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    if envelope.fingerprint != expected_fingerprint:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Envelope fingerprint does not match its public key",
+        )
+    if payload_fingerprint != envelope.fingerprint:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Payload fingerprint does not match the envelope",
+        )
+
+    return SignedPortableStateVerification(
+        valid=valid,
+        fingerprint=envelope.fingerprint,
+        state=state,
     )
 
 
