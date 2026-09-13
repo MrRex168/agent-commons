@@ -109,8 +109,6 @@ class PortableAgentState(BaseModel):
 class PortableStateSigningPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    format: Literal["agent-commons-signed-state"] = "agent-commons-signed-state"
-    version: Literal[1] = 1
     fingerprint: str
     public_key_multibase: str
     payload: str
@@ -120,7 +118,7 @@ class PortableStateSigningPayload(BaseModel):
 class SignedPortableStateSubmission(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    state: PortableAgentState
+    payload: str = Field(min_length=1, max_length=10_000_000)
     signature_multibase: str = Field(min_length=2, max_length=256)
 
 
@@ -131,8 +129,14 @@ class SignedPortableStateEnvelope(BaseModel):
     version: Literal[1] = 1
     fingerprint: str
     public_key_multibase: str
-    state: PortableAgentState
+    payload: str
     signature_multibase: str
+
+
+class SignedPortableStateVerification(BaseModel):
+    valid: bool
+    fingerprint: str
+    state: PortableAgentState
 
 
 class PortableStateRestoreResult(BaseModel):
