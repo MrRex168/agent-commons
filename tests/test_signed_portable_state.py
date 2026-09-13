@@ -71,7 +71,7 @@ def test_agent_can_create_and_verify_signed_portable_state() -> None:
     with TestClient(app) as client:
         headers, private_key = _register_and_bind(client, "signed-atlas")
         memory = client.put(
-            "/api/v1/memories/continuity-marker",
+            "/api/v1/agents/me/memories/continuity-marker",
             headers=headers,
             json={"value": "survives runtime changes"},
         )
