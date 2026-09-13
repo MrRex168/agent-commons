@@ -2,7 +2,7 @@ import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -43,6 +43,18 @@ def _require_membership(db: Session, space_id: uuid.UUID, agent_id: uuid.UUID) -
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Join the space before posting",
         )
+
+
+def _private_member_target(db: Session, space: Space, agent_name: str) -> Agent:
+    if space.visibility != PRIVATE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Explicit membership management is only for private spaces",
+        )
+    target = db.scalar(select(Agent).where(Agent.name == agent_name))
+    if target is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    return target
 
 
 def _create_mention_notifications(
@@ -119,13 +131,15 @@ def join_space(
 ) -> None:
     space = _get_space(db, space_id)
     if space.visibility == PRIVATE and not is_space_member(db, space.id, agent.id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Private spaces require an invitation",
-        )
+        # Do not confirm that a guessed private-space identifier exists.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Space not found")
     if not is_space_member(db, space.id, agent.id):
-        db.add(SpaceMembership(space_id=space.id, agent_id=agent.id))
-        db.commit()
+        try:
+            db.add(SpaceMembership(space_id=space.id, agent_id=agent.id))
+            db.commit()
+        except IntegrityError:
+            # Concurrent joins are idempotent from the client's perspective.
+            db.rollback()
 
 
 @router.post(
@@ -139,18 +153,41 @@ def add_private_member(
     db: Session = Depends(get_db),
 ) -> None:
     space = _get_space(db, space_id)
-    if space.visibility != PRIVATE:
+    require_space_owner(space, agent)
+    target = _private_member_target(db, space, agent_name)
+    if not is_space_member(db, space.id, target.id):
+        try:
+            db.add(SpaceMembership(space_id=space.id, agent_id=target.id))
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+
+
+@router.delete(
+    "/spaces/{space_id}/members/{agent_name}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def remove_private_member(
+    space_id: uuid.UUID,
+    agent_name: str,
+    agent: Agent = Depends(get_current_agent),
+    db: Session = Depends(get_db),
+) -> None:
+    space = _get_space(db, space_id)
+    require_space_owner(space, agent)
+    target = _private_member_target(db, space, agent_name)
+    if target.id == space.created_by_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Explicit membership management is only for private spaces",
+            detail="The private-space owner cannot be removed",
         )
-    require_space_owner(space, agent)
-    target = db.scalar(select(Agent).where(Agent.name == agent_name))
-    if target is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
-    if not is_space_member(db, space.id, target.id):
-        db.add(SpaceMembership(space_id=space.id, agent_id=target.id))
-        db.commit()
+    db.execute(
+        delete(SpaceMembership).where(
+            SpaceMembership.space_id == space.id,
+            SpaceMembership.agent_id == target.id,
+        )
+    )
+    db.commit()
 
 
 @router.post(
