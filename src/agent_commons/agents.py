@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+import secrets
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -6,13 +7,24 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from agent_commons.auth import get_current_agent
+from agent_commons.config import settings
 from agent_commons.db import get_db
-from agent_commons.models import Agent, AgentMemory
+from agent_commons.identity_crypto import identity_fingerprint, verify_identity_signature
+from agent_commons.models import (
+    Agent,
+    AgentCryptographicIdentity,
+    AgentIdentityChallenge,
+    AgentMemory,
+)
 from agent_commons.profile_models import AgentStructuredProfile
 from agent_commons.schemas import (
+    AgentCryptographicIdentityProfile,
     AgentProfile,
     AgentRegister,
     AgentRegistrationResult,
+    IdentityChallengeRequest,
+    IdentityChallengeResponse,
+    IdentityVerifyRequest,
     PortableAgentState,
     PortableMemory,
     PortableStateRestoreResult,
@@ -22,6 +34,7 @@ from agent_commons.schemas import (
 from agent_commons.security import generate_api_key, hash_api_key
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+IDENTITY_CHALLENGE_TTL = timedelta(minutes=5)
 
 
 def _structured_profile(
@@ -39,6 +52,28 @@ def _structured_profile(
         runtime=profile.runtime if profile else None,
         created_at=agent.created_at,
         last_seen_at=agent.last_seen_at,
+    )
+
+
+def _identity_challenge_payload(
+    fingerprint: str,
+    nonce: str,
+    issued_at: datetime,
+    expires_at: datetime,
+) -> str:
+    audience = settings.api_url.rstrip("/")
+    issued = issued_at.isoformat().replace("+00:00", "Z")
+    expires = expires_at.isoformat().replace("+00:00", "Z")
+    return "\n".join(
+        [
+            "agent-commons/identity-challenge/v1",
+            f"audience:{audience}",
+            "operation:bind",
+            f"nonce:{nonce}",
+            f"identity:{fingerprint}",
+            f"issued_at:{issued}",
+            f"expires_at:{expires}",
+        ]
     )
 
 
@@ -75,6 +110,159 @@ def register_agent(
 @router.get("/me", response_model=AgentProfile)
 def get_my_identity(agent: Agent = Depends(get_current_agent)) -> AgentProfile:
     return AgentProfile.model_validate(agent)
+
+
+@router.post("/me/identity/challenge", response_model=IdentityChallengeResponse)
+def create_identity_challenge(
+    payload: IdentityChallengeRequest,
+    agent: Agent = Depends(get_current_agent),
+    db: Session = Depends(get_db),
+) -> IdentityChallengeResponse:
+    try:
+        fingerprint = identity_fingerprint(payload.public_key_multibase)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    existing = db.get(AgentCryptographicIdentity, agent.id)
+    if existing is not None and existing.public_key_multibase != payload.public_key_multibase:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cryptographic identity already bound; key rotation is not supported yet",
+        )
+
+    claimed = db.scalar(
+        select(AgentCryptographicIdentity).where(
+            AgentCryptographicIdentity.public_key_multibase == payload.public_key_multibase
+        )
+    )
+    if claimed is not None and claimed.agent_id != agent.id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cryptographic identity is already bound to another agent",
+        )
+
+    issued_at = datetime.now(UTC)
+    expires_at = issued_at + IDENTITY_CHALLENGE_TTL
+    nonce = secrets.token_urlsafe(32)
+    challenge = AgentIdentityChallenge(
+        agent_id=agent.id,
+        public_key_multibase=payload.public_key_multibase,
+        fingerprint=fingerprint,
+        payload=_identity_challenge_payload(fingerprint, nonce, issued_at, expires_at),
+        issued_at=issued_at,
+        expires_at=expires_at,
+    )
+    db.add(challenge)
+    db.commit()
+    db.refresh(challenge)
+    return IdentityChallengeResponse(
+        challenge_id=challenge.id,
+        fingerprint=challenge.fingerprint,
+        payload=challenge.payload,
+        expires_at=challenge.expires_at,
+    )
+
+
+@router.post("/me/identity/verify", response_model=AgentCryptographicIdentityProfile)
+def verify_identity_challenge(
+    payload: IdentityVerifyRequest,
+    agent: Agent = Depends(get_current_agent),
+    db: Session = Depends(get_db),
+) -> AgentCryptographicIdentityProfile:
+    challenge = db.scalar(
+        select(AgentIdentityChallenge).where(
+            AgentIdentityChallenge.id == payload.challenge_id,
+            AgentIdentityChallenge.agent_id == agent.id,
+        )
+    )
+    if challenge is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Challenge not found")
+    if challenge.consumed_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Challenge has already been consumed",
+        )
+
+    now = datetime.now(UTC)
+    if challenge.expires_at <= now:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Challenge has expired",
+        )
+
+    try:
+        signature_valid = verify_identity_signature(
+            challenge.public_key_multibase,
+            challenge.payload,
+            payload.signature_multibase,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    if not signature_valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid cryptographic identity signature",
+        )
+
+    identity = db.get(AgentCryptographicIdentity, agent.id)
+    if identity is not None and identity.public_key_multibase != challenge.public_key_multibase:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cryptographic identity already bound; key rotation is not supported yet",
+        )
+
+    claimed = db.scalar(
+        select(AgentCryptographicIdentity).where(
+            AgentCryptographicIdentity.fingerprint == challenge.fingerprint
+        )
+    )
+    if claimed is not None and claimed.agent_id != agent.id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cryptographic identity is already bound to another agent",
+        )
+
+    if identity is None:
+        identity = AgentCryptographicIdentity(
+            agent_id=agent.id,
+            public_key_multibase=challenge.public_key_multibase,
+            fingerprint=challenge.fingerprint,
+            verified_at=now,
+        )
+        db.add(identity)
+
+    challenge.consumed_at = now
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cryptographic identity could not be bound",
+        ) from exc
+
+    db.refresh(identity)
+    return AgentCryptographicIdentityProfile.model_validate(identity)
+
+
+@router.get("/me/identity", response_model=AgentCryptographicIdentityProfile)
+def get_my_cryptographic_identity(
+    agent: Agent = Depends(get_current_agent),
+    db: Session = Depends(get_db),
+) -> AgentCryptographicIdentityProfile:
+    identity = db.get(AgentCryptographicIdentity, agent.id)
+    if identity is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Cryptographic identity not bound",
+        )
+    return AgentCryptographicIdentityProfile.model_validate(identity)
 
 
 @router.get("/me/profile", response_model=StructuredAgentProfile)
@@ -207,3 +395,20 @@ def get_public_structured_profile(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
     profile = db.get(AgentStructuredProfile, agent.id)
     return _structured_profile(agent, profile)
+
+
+@router.get("/{agent_name}/identity", response_model=AgentCryptographicIdentityProfile)
+def get_public_cryptographic_identity(
+    agent_name: str,
+    db: Session = Depends(get_db),
+) -> AgentCryptographicIdentityProfile:
+    agent = db.scalar(select(Agent).where(Agent.name == agent_name))
+    if agent is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    identity = db.get(AgentCryptographicIdentity, agent.id)
+    if identity is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Cryptographic identity not bound",
+        )
+    return AgentCryptographicIdentityProfile.model_validate(identity)
