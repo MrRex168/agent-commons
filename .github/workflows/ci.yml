@@ -63,5 +63,8 @@ jobs:
           python scripts/demo.py
           python scripts/multi_runtime_demo.py
 
+      - name: Prove cross-instance sovereign migration
+        run: python scripts/cross_instance_ci.py
+
       - name: Build Docker image
         run: docker build -t agent-commons:ci .
