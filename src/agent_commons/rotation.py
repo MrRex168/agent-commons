@@ -1,4 +1,5 @@
 import secrets
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -26,7 +27,7 @@ class RotationChallengeRequest(BaseModel):
 
 
 class RotationChallengeResponse(BaseModel):
-    challenge_id: str
+    challenge_id: uuid.UUID
     root_fingerprint: str
     sequence: int
     payload: str
@@ -34,7 +35,7 @@ class RotationChallengeResponse(BaseModel):
 
 
 class RotationCompleteRequest(BaseModel):
-    challenge_id: str
+    challenge_id: uuid.UUID
     previous_signature_multibase: str = Field(min_length=2, max_length=256)
     new_signature_multibase: str = Field(min_length=2, max_length=256)
 
@@ -44,6 +45,16 @@ class RotationIdentityResponse(BaseModel):
     root_public_key_multibase: str
     current_public_key_multibase: str
     sequence: int
+
+
+class RotationTransitionResponse(BaseModel):
+    sequence: int
+    previous_public_key_multibase: str
+    new_public_key_multibase: str
+    payload: str
+    previous_signature_multibase: str
+    new_signature_multibase: str
+    created_at: datetime
 
 
 def ensure_key_state(
@@ -168,7 +179,7 @@ def create_rotation_challenge(
     db.commit()
     db.refresh(challenge)
     return RotationChallengeResponse(
-        challenge_id=str(challenge.id),
+        challenge_id=challenge.id,
         root_fingerprint=challenge.root_fingerprint,
         sequence=challenge.sequence,
         payload=challenge.payload,
@@ -295,3 +306,30 @@ def get_rotation_state(
         current_public_key_multibase=key_state.current_public_key_multibase,
         sequence=key_state.sequence,
     )
+
+
+@router.get(
+    "/me/identity/rotation/history",
+    response_model=list[RotationTransitionResponse],
+)
+def get_rotation_history(
+    agent: Agent = Depends(get_current_agent),
+    db: Session = Depends(get_db),
+) -> list[RotationTransitionResponse]:
+    transitions = db.scalars(
+        select(AgentKeyTransition)
+        .where(AgentKeyTransition.agent_id == agent.id)
+        .order_by(AgentKeyTransition.sequence)
+    ).all()
+    return [
+        RotationTransitionResponse(
+            sequence=item.sequence,
+            previous_public_key_multibase=item.previous_public_key_multibase,
+            new_public_key_multibase=item.new_public_key_multibase,
+            payload=item.payload,
+            previous_signature_multibase=item.previous_signature_multibase,
+            new_signature_multibase=item.new_signature_multibase,
+            created_at=item.created_at,
+        )
+        for item in transitions
+    ]
