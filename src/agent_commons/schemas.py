@@ -111,6 +111,7 @@ class PortableStateSigningPayload(BaseModel):
 
     fingerprint: str
     public_key_multibase: str
+    state_sequence: int | None = None
     payload: str
     state: PortableAgentState
 
@@ -126,9 +127,10 @@ class SignedPortableStateEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     format: Literal["agent-commons-signed-state"] = "agent-commons-signed-state"
-    version: Literal[1] = 1
+    version: Literal[1, 2] = 1
     fingerprint: str
     public_key_multibase: str
+    state_sequence: int | None = None
     payload: str
     signature_multibase: str
 
@@ -136,6 +138,7 @@ class SignedPortableStateEnvelope(BaseModel):
 class SignedPortableStateVerification(BaseModel):
     valid: bool
     fingerprint: str
+    state_sequence: int | None = None
     state: PortableAgentState
 
 
@@ -169,6 +172,7 @@ class MigrationResult(BaseModel):
     api_key: str
     memories_restored: int
     source_name: str
+    state_sequence: int | None = None
 
 
 class PortableStateRestoreResult(BaseModel):

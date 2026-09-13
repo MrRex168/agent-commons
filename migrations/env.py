@@ -3,7 +3,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from agent_commons import migration_models, models, rotation_models  # noqa: F401
+from agent_commons import freshness_models, migration_models, models, rotation_models  # noqa: F401
 from agent_commons.config import settings
 from agent_commons.db import Base
 
