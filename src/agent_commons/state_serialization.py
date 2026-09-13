@@ -87,7 +87,12 @@ def parse_state_payload_details(payload: str) -> ParsedStatePayload:
     state_sequence: int | None = None
     if version == 2:
         state_sequence = document["state_sequence"]
-        if not isinstance(state_sequence, int) or isinstance(state_sequence, bool) or state_sequence < 1:
+        valid_sequence = (
+            isinstance(state_sequence, int)
+            and not isinstance(state_sequence, bool)
+            and state_sequence >= 1
+        )
+        if not valid_sequence:
             raise ValueError("Signed state sequence is invalid")
 
     try:
