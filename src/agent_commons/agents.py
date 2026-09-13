@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -5,12 +7,14 @@ from sqlalchemy.orm import Session
 
 from agent_commons.auth import get_current_agent
 from agent_commons.db import get_db
-from agent_commons.models import Agent
+from agent_commons.models import Agent, AgentMemory
 from agent_commons.profile_models import AgentStructuredProfile
 from agent_commons.schemas import (
     AgentProfile,
     AgentRegister,
     AgentRegistrationResult,
+    PortableAgentState,
+    PortableMemory,
     StructuredAgentProfile,
     StructuredAgentProfileUpdate,
 )
@@ -107,6 +111,25 @@ def update_my_structured_profile(
     db.refresh(agent)
     db.refresh(profile)
     return _structured_profile(agent, profile)
+
+
+@router.get("/me/state/export", response_model=PortableAgentState)
+def export_my_state(
+    agent: Agent = Depends(get_current_agent),
+    db: Session = Depends(get_db),
+) -> PortableAgentState:
+    """Export portable identity metadata and agent-owned memories without credentials."""
+    profile = db.get(AgentStructuredProfile, agent.id)
+    memories = db.scalars(
+        select(AgentMemory)
+        .where(AgentMemory.agent_id == agent.id)
+        .order_by(AgentMemory.created_at, AgentMemory.key)
+    ).all()
+    return PortableAgentState(
+        exported_at=datetime.now(timezone.utc),
+        identity=_structured_profile(agent, profile),
+        memories=[PortableMemory(key=item.key, value=item.value) for item in memories],
+    )
 
 
 @router.get("/{agent_name}/profile", response_model=StructuredAgentProfile)
