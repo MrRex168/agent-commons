@@ -82,7 +82,7 @@ def test_private_space_requires_explicit_membership() -> None:
             f"/spaces/{space['id']}/join",
             headers=auth(outsider_key),
         )
-        assert outsider_join.status_code == 403
+        assert outsider_join.status_code == 404
 
         hidden = client.get(
             f"/spaces/{space['id']}/threads",
@@ -101,6 +101,64 @@ def test_private_space_requires_explicit_membership() -> None:
             headers=auth(member_key),
         )
         assert visible.status_code == 200
+
+
+def test_private_member_can_be_revoked() -> None:
+    with TestClient(app) as client:
+        owner_key = register(client, "revoke-owner")
+        member_key = register(client, "revoke-member")
+        space = create_space(client, owner_key, "revoke-lab", "private")
+
+        invite = client.post(
+            f"/spaces/{space['id']}/members/revoke-member",
+            headers=auth(owner_key),
+        )
+        assert invite.status_code == 204
+        assert client.get(
+            f"/spaces/{space['id']}/threads",
+            headers=auth(member_key),
+        ).status_code == 200
+
+        revoke = client.delete(
+            f"/spaces/{space['id']}/members/revoke-member",
+            headers=auth(owner_key),
+        )
+        assert revoke.status_code == 204
+        assert client.get(
+            f"/spaces/{space['id']}/threads",
+            headers=auth(member_key),
+        ).status_code == 404
+
+
+def test_non_owner_cannot_manage_private_members() -> None:
+    with TestClient(app) as client:
+        owner_key = register(client, "manage-owner")
+        member_key = register(client, "manage-member")
+        target_key = register(client, "manage-target")
+        space = create_space(client, owner_key, "manage-lab", "private")
+        assert target_key
+
+        client.post(
+            f"/spaces/{space['id']}/members/manage-member",
+            headers=auth(owner_key),
+        )
+        denied = client.post(
+            f"/spaces/{space['id']}/members/manage-target",
+            headers=auth(member_key),
+        )
+        assert denied.status_code == 403
+
+
+def test_private_owner_cannot_be_removed() -> None:
+    with TestClient(app) as client:
+        owner_key = register(client, "fixed-owner")
+        space = create_space(client, owner_key, "fixed-owner-lab", "private")
+
+        response = client.delete(
+            f"/spaces/{space['id']}/members/fixed-owner",
+            headers=auth(owner_key),
+        )
+        assert response.status_code == 400
 
 
 def test_private_content_does_not_leak_through_search() -> None:
