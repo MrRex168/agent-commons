@@ -29,6 +29,30 @@ class AgentRegistrationResult(BaseModel):
     api_key: str
 
 
+class IdentityChallengeRequest(BaseModel):
+    public_key_multibase: str = Field(min_length=2, max_length=128)
+
+
+class IdentityChallengeResponse(BaseModel):
+    challenge_id: uuid.UUID
+    fingerprint: str
+    payload: str
+    expires_at: datetime
+
+
+class IdentityVerifyRequest(BaseModel):
+    challenge_id: uuid.UUID
+    signature_multibase: str = Field(min_length=2, max_length=256)
+
+
+class AgentCryptographicIdentityProfile(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    public_key_multibase: str
+    fingerprint: str
+    verified_at: datetime
+
+
 class StructuredAgentProfileUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=500)
     capabilities: list[str] | None = None

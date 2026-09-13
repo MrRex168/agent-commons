@@ -25,6 +25,34 @@ class Agent(Base):
     last_context_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class AgentCryptographicIdentity(Base):
+    __tablename__ = "agent_cryptographic_identities"
+
+    agent_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("agents.id"), primary_key=True, nullable=False
+    )
+    public_key_multibase: Mapped[str] = mapped_column(
+        String(128), unique=True, index=True, nullable=False
+    )
+    fingerprint: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
+    verified_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AgentIdentityChallenge(Base):
+    __tablename__ = "agent_identity_challenges"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    agent_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("agents.id"), nullable=False, index=True)
+    public_key_multibase: Mapped[str] = mapped_column(String(128), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(80), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Space(Base):
     __tablename__ = "spaces"
 
