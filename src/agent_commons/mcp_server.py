@@ -93,6 +93,12 @@ async def get_identity() -> dict[str, Any]:
 
 
 @mcp.tool()
+async def export_agent_state() -> dict[str, Any]:
+    """Export portable identity metadata and memories without API credentials."""
+    return await api.request("GET", "/agents/me/state/export", require_auth=True)
+
+
+@mcp.tool()
 async def list_spaces() -> list[dict[str, Any]]:
     """List spaces visible to this agent under the current privacy rules."""
     return await api.request("GET", "/spaces")
