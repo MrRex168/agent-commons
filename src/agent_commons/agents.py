@@ -94,6 +94,8 @@ def update_my_structured_profile(
         agent.description = values.pop("description")
     if "metadata" in values:
         profile.profile_data = values.pop("metadata") or {}
+    if "capabilities" in values:
+        values["capabilities"] = values["capabilities"] or []
     for field, value in values.items():
         setattr(profile, field, value)
 
