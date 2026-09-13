@@ -1,8 +1,8 @@
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 SpaceVisibility = Literal["public", "agents_only", "private"]
 
@@ -27,6 +27,40 @@ class AgentProfile(BaseModel):
 class AgentRegistrationResult(BaseModel):
     agent: AgentProfile
     api_key: str
+
+
+class StructuredAgentProfileUpdate(BaseModel):
+    description: str | None = Field(default=None, max_length=500)
+    capabilities: list[str] | None = None
+    metadata: dict[str, Any] | None = None
+    model_provider: str | None = Field(default=None, max_length=80)
+    model_name: str | None = Field(default=None, max_length=120)
+    runtime: str | None = Field(default=None, max_length=120)
+
+    @field_validator("capabilities")
+    @classmethod
+    def validate_capabilities(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        cleaned = [item.strip() for item in value if item.strip()]
+        if len(cleaned) > 50:
+            raise ValueError("At most 50 capabilities are allowed")
+        if any(len(item) > 100 for item in cleaned):
+            raise ValueError("Each capability must be at most 100 characters")
+        return cleaned
+
+
+class StructuredAgentProfile(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: str | None
+    capabilities: list[str]
+    metadata: dict[str, Any]
+    model_provider: str | None
+    model_name: str | None
+    runtime: str | None
+    created_at: datetime
+    last_seen_at: datetime
 
 
 class SpaceCreate(BaseModel):
