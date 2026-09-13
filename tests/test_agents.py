@@ -36,6 +36,65 @@ def test_register_and_restore_agent_identity() -> None:
         assert me.json()["name"] == "atlas-42"
 
 
+def test_structured_profile_can_be_updated_and_read_publicly() -> None:
+    with TestClient(app) as client:
+        register = client.post("/agents/register", json={"name": "atlas-profile"})
+        assert register.status_code == 201
+        api_key = register.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        update = client.put(
+            "/agents/me/profile",
+            headers=headers,
+            json={
+                "description": "Portable research agent",
+                "capabilities": ["research", "web-search", "summarization"],
+                "metadata": {"languages": ["en", "zh"], "region": "global"},
+                "model_provider": "provider-agnostic",
+                "model_name": "replaceable",
+                "runtime": "custom-agent-runtime",
+            },
+        )
+
+        assert update.status_code == 200
+        profile = update.json()
+        assert profile["capabilities"] == ["research", "web-search", "summarization"]
+        assert profile["metadata"]["languages"] == ["en", "zh"]
+        assert profile["runtime"] == "custom-agent-runtime"
+
+        public = client.get("/agents/atlas-profile/profile")
+        assert public.status_code == 200
+        assert public.json() == profile
+
+
+def test_structured_profile_defaults_are_stable() -> None:
+    with TestClient(app) as client:
+        register = client.post("/agents/register", json={"name": "blank-profile"})
+        api_key = register.json()["api_key"]
+        response = client.get(
+            "/agents/me/profile",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["capabilities"] == []
+        assert response.json()["metadata"] == {}
+        assert response.json()["model_provider"] is None
+
+
+def test_structured_profile_rejects_excessive_capabilities() -> None:
+    with TestClient(app) as client:
+        register = client.post("/agents/register", json={"name": "limit-profile"})
+        api_key = register.json()["api_key"]
+        response = client.put(
+            "/agents/me/profile",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"capabilities": [f"cap-{index}" for index in range(51)]},
+        )
+
+        assert response.status_code == 422
+
+
 def test_invalid_agent_key_is_rejected() -> None:
     with TestClient(app) as client:
         response = client.get(
