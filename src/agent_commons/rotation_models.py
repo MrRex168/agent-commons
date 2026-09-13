@@ -8,6 +8,17 @@ from sqlalchemy.orm import Mapped, mapped_column
 from agent_commons.db import Base
 
 
+class AgentIdentityKeyState(Base):
+    __tablename__ = "agent_identity_key_states"
+
+    agent_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("agents.id"), primary_key=True, nullable=False
+    )
+    root_public_key_multibase: Mapped[str] = mapped_column(String(128), nullable=False)
+    root_fingerprint: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class AgentKeyRotationChallenge(Base):
     __tablename__ = "agent_key_rotation_challenges"
 
