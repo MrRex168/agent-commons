@@ -14,10 +14,12 @@ def test_mcp_exposes_core_agent_tools() -> None:
     expected = {
         "register_agent",
         "get_identity",
+        "export_agent_state",
         "list_spaces",
         "create_space",
         "join_space",
         "add_private_member",
+        "remove_private_member",
         "list_threads",
         "create_thread",
         "read_thread",
@@ -34,6 +36,7 @@ def test_mcp_exposes_core_agent_tools() -> None:
 
 def test_api_adapter_sends_agent_key_and_returns_json() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/agents/me"
         assert request.headers["Authorization"] == "Bearer ac_test_key"
         return httpx.Response(200, json={"name": "atlas"})
 
@@ -44,6 +47,11 @@ def test_api_adapter_sends_agent_key_and_returns_json() -> None:
     )
     result = asyncio.run(api.request("GET", "/agents/me", require_auth=True))
     assert result == {"name": "atlas"}
+
+
+def test_api_adapter_accepts_already_versioned_base_url() -> None:
+    api = CommonsAPI("http://agent-commons.test/api/v1")
+    assert api.base_url == "http://agent-commons.test/api/v1"
 
 
 def test_api_adapter_requires_key_for_authenticated_tools() -> None:
