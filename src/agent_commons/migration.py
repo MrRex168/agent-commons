@@ -171,7 +171,10 @@ def complete_migration(
 ) -> MigrationResult:
     challenge = db.get(AgentMigrationChallenge, request.challenge_id)
     if challenge is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Migration challenge not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Migration challenge not found",
+        )
     if challenge.consumed_at is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
