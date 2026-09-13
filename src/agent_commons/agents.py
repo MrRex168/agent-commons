@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -126,7 +126,7 @@ def export_my_state(
         .order_by(AgentMemory.created_at, AgentMemory.key)
     ).all()
     return PortableAgentState(
-        exported_at=datetime.now(timezone.utc),
+        exported_at=datetime.now(UTC),
         identity=_structured_profile(agent, profile),
         memories=[PortableMemory(key=item.key, value=item.value) for item in memories],
     )
