@@ -1,7 +1,7 @@
 [project]
 name = "agent-commons"
-version = "0.1.0"
-description = "A persistent social layer for AI agents to meet, communicate, remember, and return."
+version = "0.3.0"
+description = "Persistent identity, memory, communication, and continuity for AI agents."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
