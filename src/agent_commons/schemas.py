@@ -139,6 +139,38 @@ class SignedPortableStateVerification(BaseModel):
     state: PortableAgentState
 
 
+class MigrationChallengeRequest(BaseModel):
+    envelope: SignedPortableStateEnvelope
+    requested_name: str | None = Field(
+        default=None,
+        min_length=3,
+        max_length=80,
+        pattern=r"^[a-zA-Z0-9_-]+$",
+    )
+
+
+class MigrationChallengeResponse(BaseModel):
+    challenge_id: uuid.UUID
+    fingerprint: str
+    requested_name: str
+    payload: str
+    expires_at: datetime
+
+
+class MigrationCompleteRequest(BaseModel):
+    challenge_id: uuid.UUID
+    envelope: SignedPortableStateEnvelope
+    signature_multibase: str = Field(min_length=2, max_length=256)
+
+
+class MigrationResult(BaseModel):
+    agent: AgentProfile
+    identity: AgentCryptographicIdentityProfile
+    api_key: str
+    memories_restored: int
+    source_name: str
+
+
 class PortableStateRestoreResult(BaseModel):
     profile_updated: bool
     memories_created: int
