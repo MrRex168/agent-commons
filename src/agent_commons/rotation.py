@@ -46,7 +46,10 @@ class RotationIdentityResponse(BaseModel):
     sequence: int
 
 
-def ensure_key_state(identity: AgentCryptographicIdentity, db: Session) -> AgentIdentityKeyState:
+def ensure_key_state(
+    identity: AgentCryptographicIdentity,
+    db: Session,
+) -> AgentIdentityKeyState:
     key_state = db.get(AgentIdentityKeyState, identity.agent_id)
     if key_state is None:
         key_state = AgentIdentityKeyState(
@@ -87,7 +90,10 @@ def _rotation_payload(
     )
 
 
-@router.post("/me/identity/rotation/challenge", response_model=RotationChallengeResponse)
+@router.post(
+    "/me/identity/rotation/challenge",
+    response_model=RotationChallengeResponse,
+)
 def create_rotation_challenge(
     request: RotationChallengeRequest,
     agent: Agent = Depends(get_current_agent),
@@ -95,31 +101,48 @@ def create_rotation_challenge(
 ) -> RotationChallengeResponse:
     identity = db.get(AgentCryptographicIdentity, agent.id)
     if identity is None:
-        raise HTTPException(status_code=409, detail="Cryptographic identity not bound")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cryptographic identity not bound",
+        )
     key_state = ensure_key_state(identity, db)
 
     try:
         identity_fingerprint(request.new_public_key_multibase)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
     if request.new_public_key_multibase == key_state.current_public_key_multibase:
-        raise HTTPException(status_code=409, detail="New key must differ from current key")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="New key must differ from current key",
+        )
 
     claimed_root = db.scalar(
         select(AgentCryptographicIdentity).where(
-            AgentCryptographicIdentity.public_key_multibase == request.new_public_key_multibase
+            AgentCryptographicIdentity.public_key_multibase
+            == request.new_public_key_multibase
         )
     )
     if claimed_root is not None and claimed_root.agent_id != agent.id:
-        raise HTTPException(status_code=409, detail="New key is already a root key for another agent")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="New key is already a root key for another agent",
+        )
 
     claimed_active = db.scalar(
         select(AgentIdentityKeyState).where(
-            AgentIdentityKeyState.current_public_key_multibase == request.new_public_key_multibase
+            AgentIdentityKeyState.current_public_key_multibase
+            == request.new_public_key_multibase
         )
     )
     if claimed_active is not None and claimed_active.agent_id != agent.id:
-        raise HTTPException(status_code=409, detail="New key is already active for another agent")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="New key is already active for another agent",
+        )
 
     issued_at = datetime.now(UTC)
     expires_at = issued_at + ROTATION_CHALLENGE_TTL
@@ -153,7 +176,10 @@ def create_rotation_challenge(
     )
 
 
-@router.post("/me/identity/rotation/complete", response_model=RotationIdentityResponse)
+@router.post(
+    "/me/identity/rotation/complete",
+    response_model=RotationIdentityResponse,
+)
 def complete_rotation(
     request: RotationCompleteRequest,
     agent: Agent = Depends(get_current_agent),
@@ -161,22 +187,40 @@ def complete_rotation(
 ) -> RotationIdentityResponse:
     challenge = db.get(AgentKeyRotationChallenge, request.challenge_id)
     if challenge is None or challenge.agent_id != agent.id:
-        raise HTTPException(status_code=404, detail="Rotation challenge not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Rotation challenge not found",
+        )
     if challenge.consumed_at is not None:
-        raise HTTPException(status_code=409, detail="Rotation challenge has already been consumed")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Rotation challenge has already been consumed",
+        )
 
     now = datetime.now(UTC)
     if challenge.expires_at <= now:
-        raise HTTPException(status_code=410, detail="Rotation challenge has expired")
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Rotation challenge has expired",
+        )
 
     identity = db.get(AgentCryptographicIdentity, agent.id)
     if identity is None:
-        raise HTTPException(status_code=409, detail="Cryptographic identity not bound")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cryptographic identity not bound",
+        )
     key_state = ensure_key_state(identity, db)
     if challenge.sequence != key_state.sequence + 1:
-        raise HTTPException(status_code=409, detail="Rotation challenge is stale")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Rotation challenge is stale",
+        )
     if challenge.previous_public_key_multibase != key_state.current_public_key_multibase:
-        raise HTTPException(status_code=409, detail="Current active key changed after challenge issuance")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Current active key changed after challenge issuance",
+        )
 
     try:
         previous_valid = verify_identity_signature(
@@ -190,7 +234,10 @@ def complete_rotation(
             request.new_signature_multibase,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
     if not previous_valid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -226,14 +273,20 @@ def complete_rotation(
     )
 
 
-@router.get("/me/identity/rotation", response_model=RotationIdentityResponse)
+@router.get(
+    "/me/identity/rotation",
+    response_model=RotationIdentityResponse,
+)
 def get_rotation_state(
     agent: Agent = Depends(get_current_agent),
     db: Session = Depends(get_db),
 ) -> RotationIdentityResponse:
     identity = db.get(AgentCryptographicIdentity, agent.id)
     if identity is None:
-        raise HTTPException(status_code=404, detail="Cryptographic identity not bound")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Cryptographic identity not bound",
+        )
     key_state = ensure_key_state(identity, db)
     db.commit()
     return RotationIdentityResponse(
