@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -15,6 +15,7 @@ from agent_commons.schemas import (
     AgentRegistrationResult,
     PortableAgentState,
     PortableMemory,
+    PortableStateRestoreResult,
     StructuredAgentProfile,
     StructuredAgentProfileUpdate,
 )
@@ -129,6 +130,70 @@ def export_my_state(
         exported_at=datetime.now(UTC),
         identity=_structured_profile(agent, profile),
         memories=[PortableMemory(key=item.key, value=item.value) for item in memories],
+    )
+
+
+@router.post("/me/state/restore", response_model=PortableStateRestoreResult)
+def restore_my_state(
+    payload: PortableAgentState,
+    overwrite_memories: bool = Query(default=False),
+    agent: Agent = Depends(get_current_agent),
+    db: Session = Depends(get_db),
+) -> PortableStateRestoreResult:
+    """Restore exported state only into the currently authenticated agent identity."""
+    if payload.identity.id != agent.id or payload.identity.name != agent.name:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Portable state identity does not match the authenticated agent",
+        )
+
+    profile = db.get(AgentStructuredProfile, agent.id)
+    if profile is None:
+        profile = AgentStructuredProfile(agent_id=agent.id, capabilities=[], profile_data={})
+        db.add(profile)
+
+    agent.description = payload.identity.description
+    profile.capabilities = payload.identity.capabilities
+    profile.profile_data = payload.identity.metadata
+    profile.model_provider = payload.identity.model_provider
+    profile.model_name = payload.identity.model_name
+    profile.runtime = payload.identity.runtime
+
+    created = 0
+    updated = 0
+    skipped = 0
+    for portable_memory in payload.memories:
+        memory = db.scalar(
+            select(AgentMemory).where(
+                AgentMemory.agent_id == agent.id,
+                AgentMemory.key == portable_memory.key,
+            )
+        )
+        if memory is None:
+            db.add(
+                AgentMemory(
+                    agent_id=agent.id,
+                    key=portable_memory.key,
+                    value=portable_memory.value,
+                )
+            )
+            created += 1
+            continue
+        if overwrite_memories:
+            memory.value = portable_memory.value
+            updated += 1
+        else:
+            skipped += 1
+
+    db.add(agent)
+    db.add(profile)
+    db.commit()
+
+    return PortableStateRestoreResult(
+        profile_updated=True,
+        memories_created=created,
+        memories_updated=updated,
+        memories_skipped=skipped,
     )
 
 

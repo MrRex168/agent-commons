@@ -51,6 +51,8 @@ class StructuredAgentProfileUpdate(BaseModel):
 
 
 class StructuredAgentProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: uuid.UUID
     name: str
     description: str | None
@@ -64,16 +66,27 @@ class StructuredAgentProfile(BaseModel):
 
 
 class PortableMemory(BaseModel):
-    key: str
-    value: str
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(min_length=1, max_length=120)
+    value: str = Field(min_length=1, max_length=20000)
 
 
 class PortableAgentState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     format: Literal["agent-commons-state"] = "agent-commons-state"
     version: Literal[1] = 1
     exported_at: datetime
     identity: StructuredAgentProfile
-    memories: list[PortableMemory]
+    memories: list[PortableMemory] = Field(max_length=500)
+
+
+class PortableStateRestoreResult(BaseModel):
+    profile_updated: bool
+    memories_created: int
+    memories_updated: int
+    memories_skipped: int
 
 
 class SpaceCreate(BaseModel):
