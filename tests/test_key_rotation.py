@@ -18,16 +18,23 @@ def _keypair() -> tuple[Ed25519PrivateKey, str]:
         encoding=serialization.Encoding.Raw,
         format=serialization.PublicFormat.Raw,
     )
-    public_key_multibase = "z" + base58.b58encode(b"\xed\x01" + public_bytes).decode("ascii")
+    multikey = b"\xed\x01" + public_bytes
+    public_key_multibase = "z" + base58.b58encode(multikey).decode("ascii")
     return private_key, public_key_multibase
 
 
 def _signature(private_key: Ed25519PrivateKey, payload: str) -> str:
-    return "z" + base58.b58encode(private_key.sign(payload.encode("utf-8"))).decode("ascii")
+    signature = private_key.sign(payload.encode("utf-8"))
+    return "z" + base58.b58encode(signature).decode("ascii")
 
 
-def _register_and_bind(client: TestClient) -> tuple[dict[str, str], Ed25519PrivateKey, str]:
-    registered = client.post("/api/v1/agents/register", json={"name": "rotating-atlas"}).json()
+def _register_and_bind(
+    client: TestClient,
+) -> tuple[dict[str, str], Ed25519PrivateKey, str]:
+    registered = client.post(
+        "/api/v1/agents/register",
+        json={"name": "rotating-atlas"},
+    ).json()
     headers = {"Authorization": f"Bearer {registered['api_key']}"}
     root_private, root_public = _keypair()
     challenge = client.post(
@@ -40,7 +47,10 @@ def _register_and_bind(client: TestClient) -> tuple[dict[str, str], Ed25519Priva
         headers=headers,
         json={
             "challenge_id": challenge["challenge_id"],
-            "signature_multibase": _signature(root_private, challenge["payload"]),
+            "signature_multibase": _signature(
+                root_private,
+                challenge["payload"],
+            ),
         },
     )
     assert verified.status_code == 200
@@ -52,7 +62,10 @@ def test_planned_rotation_preserves_root_and_advances_active_key() -> None:
         headers, root_private, root_public = _register_and_bind(client)
         new_private, new_public = _keypair()
 
-        initial = client.get("/api/v1/agents/me/identity/rotation", headers=headers)
+        initial = client.get(
+            "/api/v1/agents/me/identity/rotation",
+            headers=headers,
+        )
         assert initial.status_code == 200
         initial_body = initial.json()
         assert initial_body["root_public_key_multibase"] == root_public
@@ -71,8 +84,14 @@ def test_planned_rotation_preserves_root_and_advances_active_key() -> None:
 
         complete_body = {
             "challenge_id": challenge_body["challenge_id"],
-            "previous_signature_multibase": _signature(root_private, challenge_body["payload"]),
-            "new_signature_multibase": _signature(new_private, challenge_body["payload"]),
+            "previous_signature_multibase": _signature(
+                root_private,
+                challenge_body["payload"],
+            ),
+            "new_signature_multibase": _signature(
+                new_private,
+                challenge_body["payload"],
+            ),
         }
         complete = client.post(
             "/api/v1/agents/me/identity/rotation/complete",
@@ -93,7 +112,10 @@ def test_planned_rotation_preserves_root_and_advances_active_key() -> None:
         )
         assert replay.status_code == 409
 
-        root_identity = client.get("/api/v1/agents/me/identity", headers=headers).json()
+        root_identity = client.get(
+            "/api/v1/agents/me/identity",
+            headers=headers,
+        ).json()
         assert root_identity["public_key_multibase"] == root_public
         assert root_identity["fingerprint"] == initial_body["root_fingerprint"]
 
@@ -108,15 +130,22 @@ def test_superseded_active_key_cannot_authorize_next_rotation() -> None:
             headers=headers,
             json={"new_public_key_multibase": second_public},
         ).json()
-        assert client.post(
+        first_complete = client.post(
             "/api/v1/agents/me/identity/rotation/complete",
             headers=headers,
             json={
                 "challenge_id": first["challenge_id"],
-                "previous_signature_multibase": _signature(root_private, first["payload"]),
-                "new_signature_multibase": _signature(second_private, first["payload"]),
+                "previous_signature_multibase": _signature(
+                    root_private,
+                    first["payload"],
+                ),
+                "new_signature_multibase": _signature(
+                    second_private,
+                    first["payload"],
+                ),
             },
-        ).status_code == 200
+        )
+        assert first_complete.status_code == 200
 
         third_private, third_public = _keypair()
         second = client.post(
@@ -130,8 +159,14 @@ def test_superseded_active_key_cannot_authorize_next_rotation() -> None:
             headers=headers,
             json={
                 "challenge_id": second["challenge_id"],
-                "previous_signature_multibase": _signature(root_private, second["payload"]),
-                "new_signature_multibase": _signature(third_private, second["payload"]),
+                "previous_signature_multibase": _signature(
+                    root_private,
+                    second["payload"],
+                ),
+                "new_signature_multibase": _signature(
+                    third_private,
+                    second["payload"],
+                ),
             },
         )
         assert rejected.status_code == 401
@@ -141,8 +176,14 @@ def test_superseded_active_key_cannot_authorize_next_rotation() -> None:
             headers=headers,
             json={
                 "challenge_id": second["challenge_id"],
-                "previous_signature_multibase": _signature(second_private, second["payload"]),
-                "new_signature_multibase": _signature(third_private, second["payload"]),
+                "previous_signature_multibase": _signature(
+                    second_private,
+                    second["payload"],
+                ),
+                "new_signature_multibase": _signature(
+                    third_private,
+                    second["payload"],
+                ),
             },
         )
         assert accepted.status_code == 200
@@ -163,8 +204,14 @@ def test_root_signed_state_export_still_works_after_active_key_rotation() -> Non
             headers=headers,
             json={
                 "challenge_id": challenge["challenge_id"],
-                "previous_signature_multibase": _signature(root_private, challenge["payload"]),
-                "new_signature_multibase": _signature(active_private, challenge["payload"]),
+                "previous_signature_multibase": _signature(
+                    root_private,
+                    challenge["payload"],
+                ),
+                "new_signature_multibase": _signature(
+                    active_private,
+                    challenge["payload"],
+                ),
             },
         )
         assert rotated.status_code == 200
