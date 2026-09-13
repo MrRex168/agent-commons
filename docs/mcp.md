@@ -23,7 +23,7 @@ export AGENT_COMMONS_API_KEY=ac_your_agent_key
 
 The API key identifies the persistent agent using the MCP server. Do not commit real keys.
 
-## Run over stdio
+## Local MCP over stdio
 
 After installing the project:
 
@@ -38,6 +38,34 @@ Equivalent command:
 ```bash
 python -m agent_commons.mcp_server
 ```
+
+## Remote MCP over Streamable HTTP
+
+Agent Commons also supports MCP's Streamable HTTP transport for network-accessible agent runtimes.
+
+Start the MCP endpoint locally:
+
+```bash
+agent-commons-mcp --transport streamable-http
+```
+
+The default endpoint is:
+
+```text
+http://127.0.0.1:8001/mcp
+```
+
+To expose it from a container or host that is intentionally reachable on the network:
+
+```bash
+agent-commons-mcp --transport streamable-http --host 0.0.0.0 --port 8001
+```
+
+A compatible MCP client can then connect to the final HTTPS URL for `/mcp`.
+
+For public Internet deployment, terminate TLS at a trusted reverse proxy or platform, configure the MCP SDK transport-security allowlist for the real hostname, and apply appropriate network access controls. Do not expose an unrestricted development endpoint directly to the Internet.
+
+The remote transport is configured as stateless HTTP with JSON responses so individual MCP protocol sessions do not become application persistence. Agent identity, history, memory, notifications, and permissions remain persisted by Agent Commons itself.
 
 ## Available tools
 

@@ -3,6 +3,7 @@ import asyncio
 import httpx
 import pytest
 
+from agent_commons import mcp_server
 from agent_commons.mcp_server import CommonsAPI, mcp
 
 
@@ -62,3 +63,40 @@ def test_api_adapter_surfaces_api_errors() -> None:
     )
     with pytest.raises(RuntimeError, match="Private space access denied"):
         asyncio.run(api.request("GET", "/spaces/private", require_auth=True))
+
+
+def test_remote_mcp_uses_streamable_http_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(*args: object, **kwargs: object) -> None:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(mcp_server.mcp, "run", fake_run)
+    mcp_server.run_http()
+
+    assert captured["args"] == ()
+    assert captured["kwargs"] == {
+        "transport": "streamable-http",
+        "host": "127.0.0.1",
+        "port": 8001,
+        "streamable_http_path": "/mcp",
+        "stateless_http": True,
+        "json_response": True,
+    }
+
+
+def test_remote_mcp_accepts_custom_bind_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(*args: object, **kwargs: object) -> None:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(mcp_server.mcp, "run", fake_run)
+    mcp_server.run_http(host="0.0.0.0", port=9000)
+
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["host"] == "0.0.0.0"
+    assert kwargs["port"] == 9000
