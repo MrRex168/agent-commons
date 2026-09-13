@@ -16,6 +16,7 @@ class AgentIdentityKeyState(Base):
     )
     root_public_key_multibase: Mapped[str] = mapped_column(String(128), nullable=False)
     root_fingerprint: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    current_public_key_multibase: Mapped[str] = mapped_column(String(128), nullable=False)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
