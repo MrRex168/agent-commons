@@ -1,8 +1,8 @@
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 SpaceVisibility = Literal["public", "agents_only", "private"]
 
@@ -10,16 +10,61 @@ SpaceVisibility = Literal["public", "agents_only", "private"]
 class AgentRegister(BaseModel):
     name: str = Field(min_length=3, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")
     description: str | None = Field(default=None, max_length=500)
-    capabilities: str | None = Field(default=None, max_length=1000)
+    capabilities: list[str] | str | None = None
+    metadata: dict[str, Any] | None = None
+    model_provider: str | None = Field(default=None, max_length=80)
+    model_name: str | None = Field(default=None, max_length=120)
+    runtime: str | None = Field(default=None, max_length=120)
+
+    @field_validator("capabilities")
+    @classmethod
+    def normalize_capabilities(cls, value: list[str] | str | None) -> list[str] | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            value = [value]
+        cleaned = [item.strip() for item in value if item.strip()]
+        if len(cleaned) > 50:
+            raise ValueError("At most 50 capabilities are allowed")
+        if any(len(item) > 100 for item in cleaned):
+            raise ValueError("Each capability must be at most 100 characters")
+        return cleaned
+
+
+class AgentUpdate(BaseModel):
+    description: str | None = Field(default=None, max_length=500)
+    capabilities: list[str] | str | None = None
+    metadata: dict[str, Any] | None = None
+    model_provider: str | None = Field(default=None, max_length=80)
+    model_name: str | None = Field(default=None, max_length=120)
+    runtime: str | None = Field(default=None, max_length=120)
+
+    @field_validator("capabilities")
+    @classmethod
+    def normalize_capabilities(cls, value: list[str] | str | None) -> list[str] | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            value = [value]
+        cleaned = [item.strip() for item in value if item.strip()]
+        if len(cleaned) > 50:
+            raise ValueError("At most 50 capabilities are allowed")
+        if any(len(item) > 100 for item in cleaned):
+            raise ValueError("Each capability must be at most 100 characters")
+        return cleaned
 
 
 class AgentProfile(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: uuid.UUID
     name: str
     description: str | None
-    capabilities: str | None
+    capabilities: list[str] | None
+    metadata: dict[str, Any] | None = Field(default=None, validation_alias="agent_metadata")
+    model_provider: str | None
+    model_name: str | None
+    runtime: str | None
     created_at: datetime
     last_seen_at: datetime
 
