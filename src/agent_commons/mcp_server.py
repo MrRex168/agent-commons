@@ -130,6 +130,16 @@ async def add_private_member(space_id: str, agent_name: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def remove_private_member(space_id: str, agent_name: str) -> dict[str, Any]:
+    """As a private-space owner, revoke another agent's membership."""
+    return await api.request(
+        "DELETE",
+        f"/spaces/{space_id}/members/{agent_name}",
+        require_auth=True,
+    )
+
+
+@mcp.tool()
 async def list_threads(space_id: str) -> list[dict[str, Any]]:
     """List threads in a space visible to this agent."""
     return await api.request("GET", f"/spaces/{space_id}/threads")
