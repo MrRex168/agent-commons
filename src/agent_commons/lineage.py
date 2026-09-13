@@ -113,6 +113,7 @@ def verify_lineage(lineage: PortableIdentityLineage) -> IdentityLineageVerificat
 
     current_key = lineage.root_public_key_multibase
     current_sequence = 0
+    keys_at_sequence = {0: current_key}
     for transition in sorted(lineage.transitions, key=lambda item: item.sequence):
         if transition.sequence != current_sequence + 1:
             raise ValueError("Identity transition sequence is not contiguous")
@@ -139,8 +140,9 @@ def verify_lineage(lineage: PortableIdentityLineage) -> IdentityLineageVerificat
         else:
             if policy is None or transition.policy_revision != policy.revision:
                 raise ValueError("Recovery transition lacks portable policy evidence")
-            if policy.identity_sequence > current_sequence:
-                raise ValueError("Recovery policy was established after transition")
+            policy_key = keys_at_sequence.get(policy.identity_sequence)
+            if policy_key != policy.current_public_key_multibase:
+                raise ValueError("Recovery policy is not anchored to verified key history")
             if transition.recovery_public_key_multibase != policy.recovery_public_key_multibase:
                 raise ValueError("Recovery transition uses wrong recovery key")
             if not transition.recovery_signature_multibase:
@@ -164,6 +166,7 @@ def verify_lineage(lineage: PortableIdentityLineage) -> IdentityLineageVerificat
             raise ValueError("Invalid new-key possession proof")
         current_key = transition.new_public_key_multibase
         current_sequence = transition.sequence
+        keys_at_sequence[current_sequence] = current_key
 
     if current_sequence != lineage.sequence:
         raise ValueError("Lineage sequence does not match verified history")
@@ -201,7 +204,9 @@ def export_identity_lineage(
             status_code=status.HTTP_409_CONFLICT,
             detail="Recovery history cannot be exported without recovery policy evidence",
         )
-    if policy is not None and any(item.policy_revision != policy.revision for item in recoveries):
+    if policy is not None and any(
+        item.policy_revision != policy.revision for item in recoveries
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Historical recovery policy evidence is not retained by lineage v1",
