@@ -8,6 +8,7 @@ from agent_commons import (  # noqa: F401
     migration_models,
     models,
     recovery_models,
+    remote_models,
     rotation_models,
 )
 from agent_commons.config import settings
