@@ -43,7 +43,7 @@ def upgrade() -> None:
         unique=False,
     )
 
-    # Existing installations only retain the current policy. Preserve that evidence
+    # Older installations only retain the current policy. Preserve that evidence
     # as the first immutable history row available after this migration.
     op.execute(
         sa.text(
@@ -66,14 +66,16 @@ def upgrade() -> None:
                 p.agent_id,
                 p.revision,
                 CAST(
-                    substring(
-                        p.statement_payload
-                        FROM 'identity_sequence:([0-9]+)'
+                    split_part(
+                        split_part(p.statement_payload, 'identity_sequence:', 2),
+                        E'\\n',
+                        1
                     ) AS INTEGER
                 ),
-                substring(
-                    p.statement_payload
-                    FROM 'current_key:([^' || chr(10) || ']+)'
+                split_part(
+                    split_part(p.statement_payload, 'current_key:', 2),
+                    E'\\n',
+                    1
                 ),
                 p.recovery_public_key_multibase,
                 p.recovery_fingerprint,
