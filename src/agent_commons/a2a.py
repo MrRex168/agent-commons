@@ -58,7 +58,10 @@ class A2AAgentCard(BaseModel):
     supportsAuthenticatedExtendedCard: bool = False
 
 
-def _profile_and_config(agent: Agent, db: Session) -> tuple[AgentStructuredProfile | None, dict[str, Any]]:
+def _profile_and_config(
+    agent: Agent,
+    db: Session,
+) -> tuple[AgentStructuredProfile | None, dict[str, Any]]:
     profile = db.get(AgentStructuredProfile, agent.id)
     metadata = profile.profile_data if profile is not None else {}
     raw = metadata.get("a2a") if isinstance(metadata, dict) else None
@@ -78,7 +81,12 @@ def _required_string(config: dict[str, Any], key: str) -> str:
 
 def _string_list(config: dict[str, Any], key: str, default: list[str]) -> list[str]:
     value = config.get(key, default)
-    if not isinstance(value, list) or not value or not all(isinstance(item, str) and item for item in value):
+    valid = (
+        isinstance(value, list)
+        and bool(value)
+        and all(isinstance(item, str) and item for item in value)
+    )
+    if not valid:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"A2A metadata '{key}' must be a non-empty list of strings",
@@ -96,7 +104,10 @@ def _skill_from_capability(capability: str) -> A2AAgentSkill:
     )
 
 
-def _skills(config: dict[str, Any], profile: AgentStructuredProfile | None) -> list[A2AAgentSkill]:
+def _skills(
+    config: dict[str, Any],
+    profile: AgentStructuredProfile | None,
+) -> list[A2AAgentSkill]:
     raw_skills = config.get("skills")
     if raw_skills is not None:
         if not isinstance(raw_skills, list):
@@ -149,7 +160,9 @@ def build_agent_card(agent: Agent, db: Session) -> A2AAgentCard:
                 detail="A2A metadata 'additionalInterfaces' must be a list",
             )
         try:
-            additional_interfaces = [A2AAgentInterface.model_validate(item) for item in interfaces]
+            additional_interfaces = [
+                A2AAgentInterface.model_validate(item) for item in interfaces
+            ]
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -169,7 +182,10 @@ def build_agent_card(agent: Agent, db: Session) -> A2AAgentCard:
             status_code=status.HTTP_409_CONFLICT,
             detail="A2A metadata 'securitySchemes' must be an object",
         )
-    if security_requirements is not None and not isinstance(security_requirements, list):
+    if security_requirements is not None and not isinstance(
+        security_requirements,
+        list,
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A2A metadata 'security' must be a list",
@@ -187,7 +203,11 @@ def build_agent_card(agent: Agent, db: Session) -> A2AAgentCard:
         securitySchemes=security_schemes,
         security=security_requirements,
         defaultInputModes=_string_list(config, "defaultInputModes", ["text/plain"]),
-        defaultOutputModes=_string_list(config, "defaultOutputModes", ["text/plain"]),
+        defaultOutputModes=_string_list(
+            config,
+            "defaultOutputModes",
+            ["text/plain"],
+        ),
         skills=_skills(config, profile),
         supportsAuthenticatedExtendedCard=bool(
             config.get("supportsAuthenticatedExtendedCard", False)
