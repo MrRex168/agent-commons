@@ -51,7 +51,8 @@ class RemoteAgentReferenceProfile(BaseModel):
 
 def _host_addresses(hostname: str) -> set[str]:
     try:
-        return {item[4][0] for item in socket.getaddrinfo(hostname, 443, type=socket.SOCK_STREAM)}
+        results = socket.getaddrinfo(hostname, 443, type=socket.SOCK_STREAM)
+        return {item[4][0] for item in results}
     except socket.gaierror as exc:
         raise ValueError("Agent Card hostname could not be resolved") from exc
 
@@ -66,7 +67,9 @@ def _validate_card_url(url: str) -> None:
     if parsed.scheme != "https":
         raise ValueError("Remote Agent Card URL must use HTTPS")
     if not parsed.hostname or parsed.username or parsed.password:
-        raise ValueError("Remote Agent Card URL must contain a public hostname without credentials")
+        raise ValueError(
+            "Remote Agent Card URL must contain a public hostname without credentials"
+        )
     hostname = parsed.hostname.lower().rstrip(".")
     if hostname == "localhost" or hostname.endswith(".localhost"):
         raise ValueError("Localhost Agent Card URLs are not allowed")
@@ -79,7 +82,9 @@ def _validate_card_url(url: str) -> None:
         addresses = {str(literal)}
 
     if not addresses or any(not _is_public_address(item) for item in addresses):
-        raise ValueError("Remote Agent Card hostname must resolve only to public IP addresses")
+        raise ValueError(
+            "Remote Agent Card hostname must resolve only to public IP addresses"
+        )
 
 
 def _fetch_agent_card(url: str) -> A2AAgentCard:
@@ -108,9 +113,13 @@ def _fetch_agent_card(url: str) -> A2AAgentCard:
         ) from exc
 
 
-def _verified_identity(card: A2AAgentCard) -> tuple[str | None, str | None, int | None, dict | None]:
+def _verified_identity(
+    card: A2AAgentCard,
+) -> tuple[str | None, str | None, int | None, dict[str, Any] | None]:
     extensions = card.capabilities.extensions or []
-    matching = [item for item in extensions if item.uri == SOVEREIGN_IDENTITY_EXTENSION_URI]
+    matching = [
+        item for item in extensions if item.uri == SOVEREIGN_IDENTITY_EXTENSION_URI
+    ]
     if not matching:
         return None, None, None, None
     if len(matching) != 1 or not isinstance(matching[0].params, dict):
@@ -144,7 +153,11 @@ def _verified_identity(card: A2AAgentCard) -> tuple[str | None, str | None, int 
     return root_fingerprint, controller, sequence, lineage.model_dump(mode="json")
 
 
-def _store_reference(card_url: str, card: A2AAgentCard, db: Session) -> RemoteAgentReference:
+def _store_reference(
+    card_url: str,
+    card: A2AAgentCard,
+    db: Session,
+) -> RemoteAgentReference:
     root, controller, sequence, lineage = _verified_identity(card)
     by_url = db.scalar(
         select(RemoteAgentReference).where(RemoteAgentReference.card_url == card_url)
@@ -152,7 +165,9 @@ def _store_reference(card_url: str, card: A2AAgentCard, db: Session) -> RemoteAg
     by_root = None
     if root is not None:
         by_root = db.scalar(
-            select(RemoteAgentReference).where(RemoteAgentReference.root_fingerprint == root)
+            select(RemoteAgentReference).where(
+                RemoteAgentReference.root_fingerprint == root
+            )
         )
     if by_url is not None and by_url.root_fingerprint not in (None, root):
         raise HTTPException(
@@ -167,7 +182,11 @@ def _store_reference(card_url: str, card: A2AAgentCard, db: Session) -> RemoteAg
 
     reference = by_root or by_url
     if reference is None:
-        reference = RemoteAgentReference(card_url=card_url, name=card.name, a2a_url=card.url)
+        reference = RemoteAgentReference(
+            card_url=card_url,
+            name=card.name,
+            a2a_url=card.url,
+        )
         db.add(reference)
 
     reference.card_url = card_url
@@ -201,7 +220,8 @@ def resolve_remote_agent(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
-    return RemoteAgentReferenceProfile.model_validate(_store_reference(card_url, card, db))
+    reference = _store_reference(card_url, card, db)
+    return RemoteAgentReferenceProfile.model_validate(reference)
 
 
 @router.get("", response_model=list[RemoteAgentReferenceProfile])
@@ -209,9 +229,11 @@ def list_remote_agents(
     _agent: Agent = Depends(get_current_agent),
     db: Session = Depends(get_db),
 ) -> list[RemoteAgentReferenceProfile]:
-    references = db.scalars(
-        select(RemoteAgentReference).order_by(RemoteAgentReference.name, RemoteAgentReference.id)
-    ).all()
+    query = select(RemoteAgentReference).order_by(
+        RemoteAgentReference.name,
+        RemoteAgentReference.id,
+    )
+    references = db.scalars(query).all()
     return [RemoteAgentReferenceProfile.model_validate(item) for item in references]
 
 
@@ -223,5 +245,8 @@ def get_remote_agent(
 ) -> RemoteAgentReferenceProfile:
     reference = db.get(RemoteAgentReference, reference_id)
     if reference is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Remote agent not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Remote agent not found",
+        )
     return RemoteAgentReferenceProfile.model_validate(reference)
