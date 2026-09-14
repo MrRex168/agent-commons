@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import socket
 import uuid
 from datetime import UTC, datetime
@@ -13,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, HttpUrl
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from agent_commons.a2a import A2AAgentCard
+from agent_commons.a2a import A2AAgentCard, A2A_PROTOCOL_VERSION
 from agent_commons.a2a_identity import SOVEREIGN_IDENTITY_EXTENSION_URI
 from agent_commons.auth import get_current_agent
 from agent_commons.db import get_db
@@ -87,30 +88,61 @@ def _validate_card_url(url: str) -> None:
         )
 
 
+def _read_limited_response(response: httpx.Response) -> bytes:
+    declared_size = response.headers.get("Content-Length")
+    if declared_size is not None:
+        try:
+            if int(declared_size) > MAX_AGENT_CARD_BYTES:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail="Remote Agent Card exceeds the maximum allowed size",
+                )
+        except ValueError:
+            pass
+
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in response.iter_bytes():
+        total += len(chunk)
+        if total > MAX_AGENT_CARD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="Remote Agent Card exceeds the maximum allowed size",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def _fetch_agent_card(url: str) -> A2AAgentCard:
     _validate_card_url(url)
     try:
         with httpx.Client(timeout=5.0, follow_redirects=False) as client:
-            response = client.get(url, headers={"Accept": "application/json"})
-            response.raise_for_status()
+            with client.stream(
+                "GET",
+                url,
+                headers={"Accept": "application/json"},
+            ) as response:
+                response.raise_for_status()
+                raw = _read_limited_response(response)
     except httpx.HTTPError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Remote Agent Card could not be fetched",
         ) from exc
 
-    if len(response.content) > MAX_AGENT_CARD_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="Remote Agent Card exceeds the maximum allowed size",
-        )
     try:
-        return A2AAgentCard.model_validate(response.json())
+        card = A2AAgentCard.model_validate(json.loads(raw))
     except (ValueError, TypeError) as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Remote Agent Card is invalid: {exc}",
         ) from exc
+    if card.protocolVersion != A2A_PROTOCOL_VERSION:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Remote Agent Card must use A2A {A2A_PROTOCOL_VERSION}",
+        )
+    return card
 
 
 def _verified_identity(
