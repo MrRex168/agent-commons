@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from agent_commons.a2a import well_known_router as a2a_well_known_router
 from agent_commons.agents import router as agents_router
 from agent_commons.api_v1 import router as api_v1_router
 from agent_commons.communication import router as communication_router
@@ -22,6 +23,7 @@ app.include_router(discovery_router)
 
 # New integrations should use the stable, versioned API namespace.
 app.include_router(api_v1_router)
+app.include_router(a2a_well_known_router)
 app.include_router(observer_router)
 
 
