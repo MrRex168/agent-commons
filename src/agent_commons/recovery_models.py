@@ -23,6 +23,33 @@ class AgentRecoveryPolicy(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class AgentRecoveryPolicyStatement(Base):
+    __tablename__ = "agent_recovery_policy_statements"
+    __table_args__ = (
+        UniqueConstraint(
+            "agent_id",
+            "revision",
+            name="uq_agent_recovery_policy_statement_revision",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    agent_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("agents.id"), nullable=False, index=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    identity_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    current_public_key_multibase: Mapped[str] = mapped_column(String(128), nullable=False)
+    recovery_public_key_multibase: Mapped[str] = mapped_column(String(128), nullable=False)
+    recovery_fingerprint: Mapped[str] = mapped_column(String(80), nullable=False)
+    statement_payload: Mapped[str] = mapped_column(Text, nullable=False)
+    active_signature_multibase: Mapped[str] = mapped_column(String(256), nullable=False)
+    recovery_signature_multibase: Mapped[str] = mapped_column(String(256), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class AgentRecoveryPolicyChallenge(Base):
     __tablename__ = "agent_recovery_policy_challenges"
 
