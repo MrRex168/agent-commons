@@ -17,6 +17,7 @@ from agent_commons.recovery_models import (
     AgentRecoveryChallenge,
     AgentRecoveryPolicy,
     AgentRecoveryPolicyChallenge,
+    AgentRecoveryPolicyStatement,
     AgentRecoveryTransition,
 )
 from agent_commons.rotation import ensure_key_state
@@ -350,8 +351,29 @@ def complete_recovery_policy(
         current.recovery_signature_multibase = request.recovery_signature_multibase
         current.updated_at = now
 
+    db.add(
+        AgentRecoveryPolicyStatement(
+            agent_id=agent.id,
+            revision=challenge.revision,
+            identity_sequence=challenge.identity_sequence,
+            current_public_key_multibase=challenge.current_public_key_multibase,
+            recovery_public_key_multibase=challenge.proposed_recovery_public_key_multibase,
+            recovery_fingerprint=recovery_fingerprint,
+            statement_payload=challenge.payload,
+            active_signature_multibase=request.active_signature_multibase,
+            recovery_signature_multibase=request.recovery_signature_multibase,
+            created_at=now,
+        )
+    )
     challenge.consumed_at = now
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Recovery policy revision could not be committed",
+        ) from exc
     return RecoveryPolicyResponse(
         root_fingerprint=key_state.root_fingerprint,
         recovery_public_key_multibase=current.recovery_public_key_multibase,
