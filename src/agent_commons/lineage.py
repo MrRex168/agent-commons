@@ -276,7 +276,11 @@ def export_identity_lineage(
 
     policy_revisions = {item.revision for item in policy_history}
     missing_revisions = sorted(
-        {item.policy_revision for item in recoveries if item.policy_revision not in policy_revisions}
+        {
+            item.policy_revision
+            for item in recoveries
+            if item.policy_revision not in policy_revisions
+        }
     )
     if missing_revisions:
         raise HTTPException(
