@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, HttpUrl
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from agent_commons.a2a import A2AAgentCard, A2A_PROTOCOL_VERSION
+from agent_commons.a2a import A2A_PROTOCOL_VERSION, A2AAgentCard
 from agent_commons.a2a_identity import SOVEREIGN_IDENTITY_EXTENSION_URI
 from agent_commons.auth import get_current_agent
 from agent_commons.db import get_db
