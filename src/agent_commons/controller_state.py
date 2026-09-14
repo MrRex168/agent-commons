@@ -334,24 +334,48 @@ def verify_controller_signed_state(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if envelope.root_fingerprint != parsed.root_fingerprint:
-        raise HTTPException(status_code=422, detail="Envelope root identity does not match payload")
+        raise HTTPException(
+            status_code=422,
+            detail="Envelope root identity does not match payload",
+        )
     if envelope.controller_public_key_multibase != parsed.controller_public_key_multibase:
-        raise HTTPException(status_code=422, detail="Envelope controller key does not match payload")
+        raise HTTPException(
+            status_code=422,
+            detail="Envelope controller key does not match payload",
+        )
     if envelope.identity_sequence != parsed.identity_sequence:
-        raise HTTPException(status_code=422, detail="Envelope identity sequence does not match payload")
+        raise HTTPException(
+            status_code=422,
+            detail="Envelope identity sequence does not match payload",
+        )
     if envelope.state_sequence != parsed.state_sequence:
-        raise HTTPException(status_code=422, detail="Envelope state sequence does not match payload")
+        raise HTTPException(
+            status_code=422,
+            detail="Envelope state sequence does not match payload",
+        )
     if envelope.lineage_digest != parsed.lineage_digest or digest != parsed.lineage_digest:
-        raise HTTPException(status_code=422, detail="Portable lineage digest does not match signed state")
+        raise HTTPException(
+            status_code=422,
+            detail="Portable lineage digest does not match signed state",
+        )
     if lineage_verification.root_fingerprint != parsed.root_fingerprint:
-        raise HTTPException(status_code=422, detail="Portable lineage root does not match signed state")
+        raise HTTPException(
+            status_code=422,
+            detail="Portable lineage root does not match signed state",
+        )
     if (
         lineage_verification.current_public_key_multibase
         != parsed.controller_public_key_multibase
     ):
-        raise HTTPException(status_code=422, detail="Signed state key is not the verified current controller")
+        raise HTTPException(
+            status_code=422,
+            detail="Signed state key is not the verified current controller",
+        )
     if lineage_verification.sequence != parsed.identity_sequence:
-        raise HTTPException(status_code=422, detail="Portable lineage sequence does not match signed state")
+        raise HTTPException(
+            status_code=422,
+            detail="Portable lineage sequence does not match signed state",
+        )
 
     try:
         valid = verify_identity_signature(
