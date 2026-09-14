@@ -7,6 +7,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from agent_commons.a2a_identity import (
+    SOVEREIGN_IDENTITY_EXTENSION_URI,
+    build_sovereign_identity_params,
+)
 from agent_commons.config import settings
 from agent_commons.db import get_db
 from agent_commons.models import Agent
@@ -19,10 +23,18 @@ router = APIRouter(prefix="/agents", tags=["a2a"])
 well_known_router = APIRouter(tags=["a2a"])
 
 
+class A2AAgentExtension(BaseModel):
+    uri: str
+    description: str | None = None
+    required: bool | None = None
+    params: dict[str, Any] | None = None
+
+
 class A2AAgentCapabilities(BaseModel):
     streaming: bool | None = None
     pushNotifications: bool | None = None
     stateTransitionHistory: bool | None = None
+    extensions: list[A2AAgentExtension] | None = None
 
 
 class A2AAgentSkill(BaseModel):
@@ -127,6 +139,59 @@ def _skills(
     return [_skill_from_capability(item) for item in capabilities]
 
 
+def _extensions(
+    agent: Agent,
+    config: dict[str, Any],
+    capabilities_config: dict[str, Any],
+    db: Session,
+) -> list[A2AAgentExtension] | None:
+    raw_extensions = capabilities_config.get("extensions", [])
+    if not isinstance(raw_extensions, list):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A2A capabilities 'extensions' must be a list",
+        )
+    try:
+        extensions = [A2AAgentExtension.model_validate(item) for item in raw_extensions]
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Invalid A2A extension metadata: {exc}",
+        ) from exc
+
+    if config.get("publishSovereignIdentity") is True:
+        if any(item.uri == SOVEREIGN_IDENTITY_EXTENSION_URI for item in extensions):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Remove the manually configured Agent Commons identity extension",
+            )
+        extensions.append(
+            A2AAgentExtension(
+                uri=SOVEREIGN_IDENTITY_EXTENSION_URI,
+                description="Portable Agent Commons sovereign identity and lineage proof.",
+                required=False,
+                params=build_sovereign_identity_params(agent, db),
+            )
+        )
+    return extensions or None
+
+
+def _capabilities(
+    agent: Agent,
+    config: dict[str, Any],
+    db: Session,
+) -> A2AAgentCapabilities:
+    capabilities_config = config.get("capabilities", {})
+    if not isinstance(capabilities_config, dict):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A2A metadata 'capabilities' must be an object",
+        )
+    values = dict(capabilities_config)
+    values["extensions"] = _extensions(agent, config, capabilities_config, db)
+    return A2AAgentCapabilities.model_validate(values)
+
+
 def build_agent_card(agent: Agent, db: Session) -> A2AAgentCard:
     profile, config = _profile_and_config(agent, db)
     endpoint = _required_string(config, "url")
@@ -142,13 +207,6 @@ def build_agent_card(agent: Agent, db: Session) -> A2AAgentCard:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A2A metadata 'version' must be non-empty",
-        )
-
-    capabilities_config = config.get("capabilities", {})
-    if not isinstance(capabilities_config, dict):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A2A metadata 'capabilities' must be an object",
         )
 
     interfaces = config.get("additionalInterfaces")
@@ -199,7 +257,7 @@ def build_agent_card(agent: Agent, db: Session) -> A2AAgentCard:
         additionalInterfaces=additional_interfaces,
         version=version,
         documentationUrl=config.get("documentationUrl"),
-        capabilities=A2AAgentCapabilities.model_validate(capabilities_config),
+        capabilities=_capabilities(agent, config, db),
         securitySchemes=security_schemes,
         security=security_requirements,
         defaultInputModes=_string_list(config, "defaultInputModes", ["text/plain"]),
