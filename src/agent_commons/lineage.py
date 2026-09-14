@@ -11,7 +11,11 @@ from agent_commons.auth import get_current_agent
 from agent_commons.db import get_db
 from agent_commons.identity_crypto import identity_fingerprint, verify_identity_signature
 from agent_commons.models import Agent, AgentCryptographicIdentity
-from agent_commons.recovery_models import AgentRecoveryPolicy, AgentRecoveryTransition
+from agent_commons.recovery_models import (
+    AgentRecoveryPolicy,
+    AgentRecoveryPolicyStatement,
+    AgentRecoveryTransition,
+)
 from agent_commons.rotation import ensure_key_state
 from agent_commons.rotation_models import AgentKeyTransition
 
@@ -43,12 +47,13 @@ class LineageTransition(BaseModel):
 
 class PortableIdentityLineage(BaseModel):
     format: Literal["agent-commons-identity-lineage"] = "agent-commons-identity-lineage"
-    version: Literal[1] = 1
+    version: Literal[1, 2] = 2
     root_fingerprint: str
     root_public_key_multibase: str
     current_public_key_multibase: str
     sequence: int = Field(ge=0)
     recovery_policy: RecoveryPolicyEvidence | None = None
+    recovery_policies: list[RecoveryPolicyEvidence] = Field(default_factory=list)
     transitions: list[LineageTransition]
 
 
@@ -103,17 +108,48 @@ def _verify_policy(
         raise ValueError("Invalid recovery policy possession proof")
 
 
+def _portable_policies(
+    lineage: PortableIdentityLineage,
+) -> tuple[dict[int, RecoveryPolicyEvidence], RecoveryPolicyEvidence | None]:
+    if lineage.version == 1:
+        policies = [lineage.recovery_policy] if lineage.recovery_policy is not None else []
+    else:
+        policies = list(lineage.recovery_policies)
+        if lineage.recovery_policy is not None and all(
+            item.revision != lineage.recovery_policy.revision for item in policies
+        ):
+            policies.append(lineage.recovery_policy)
+
+    policy_by_revision: dict[int, RecoveryPolicyEvidence] = {}
+    for policy in policies:
+        if policy.revision in policy_by_revision:
+            raise ValueError("Duplicate recovery policy revision in portable lineage")
+        _verify_policy(lineage, policy)
+        policy_by_revision[policy.revision] = policy
+
+    current_policy = lineage.recovery_policy
+    if lineage.version == 2:
+        if policy_by_revision:
+            latest = policy_by_revision[max(policy_by_revision)]
+            if current_policy is None:
+                raise ValueError("Lineage v2 is missing current recovery policy evidence")
+            if current_policy.model_dump() != latest.model_dump():
+                raise ValueError("Current recovery policy is not the latest portable revision")
+        elif current_policy is not None:
+            raise ValueError("Lineage v2 current recovery policy lacks immutable history")
+
+    return policy_by_revision, current_policy
+
+
 def verify_lineage(lineage: PortableIdentityLineage) -> IdentityLineageVerification:
     if identity_fingerprint(lineage.root_public_key_multibase) != lineage.root_fingerprint:
         raise ValueError("Root fingerprint does not match root public key")
 
-    policy = lineage.recovery_policy
-    if policy is not None:
-        _verify_policy(lineage, policy)
-
+    policies, current_policy = _portable_policies(lineage)
     current_key = lineage.root_public_key_multibase
     current_sequence = 0
     keys_at_sequence = {0: current_key}
+
     for transition in sorted(lineage.transitions, key=lambda item: item.sequence):
         if transition.sequence != current_sequence + 1:
             raise ValueError("Identity transition sequence is not contiguous")
@@ -138,8 +174,11 @@ def verify_lineage(lineage: PortableIdentityLineage) -> IdentityLineageVerificat
             ):
                 raise ValueError("Invalid rotation authorization")
         else:
-            if policy is None or transition.policy_revision != policy.revision:
-                raise ValueError("Recovery transition lacks portable policy evidence")
+            if transition.policy_revision is None:
+                raise ValueError("Recovery transition is missing policy revision")
+            policy = policies.get(transition.policy_revision)
+            if policy is None:
+                raise ValueError("Recovery transition lacks exact portable policy evidence")
             policy_key = keys_at_sequence.get(policy.identity_sequence)
             if policy_key != policy.current_public_key_multibase:
                 raise ValueError("Recovery policy is not anchored to verified key history")
@@ -168,6 +207,11 @@ def verify_lineage(lineage: PortableIdentityLineage) -> IdentityLineageVerificat
         current_sequence = transition.sequence
         keys_at_sequence[current_sequence] = current_key
 
+    for policy in policies.values():
+        policy_key = keys_at_sequence.get(policy.identity_sequence)
+        if policy_key != policy.current_public_key_multibase:
+            raise ValueError("Recovery policy is not anchored to verified key history")
+
     if current_sequence != lineage.sequence:
         raise ValueError("Lineage sequence does not match verified history")
     if current_key != lineage.current_public_key_multibase:
@@ -178,7 +222,33 @@ def verify_lineage(lineage: PortableIdentityLineage) -> IdentityLineageVerificat
         root_fingerprint=lineage.root_fingerprint,
         current_public_key_multibase=current_key,
         sequence=current_sequence,
-        recovery_policy_revision=policy.revision if policy else None,
+        recovery_policy_revision=current_policy.revision if current_policy else None,
+    )
+
+
+def _policy_evidence_from_current(policy: AgentRecoveryPolicy) -> RecoveryPolicyEvidence:
+    return RecoveryPolicyEvidence(
+        revision=policy.revision,
+        identity_sequence=_int_field(policy.statement_payload, "identity_sequence"),
+        current_public_key_multibase=_field(policy.statement_payload, "current_key"),
+        recovery_public_key_multibase=policy.recovery_public_key_multibase,
+        payload=policy.statement_payload,
+        active_signature_multibase=policy.active_signature_multibase,
+        recovery_signature_multibase=policy.recovery_signature_multibase,
+    )
+
+
+def _policy_evidence_from_statement(
+    policy: AgentRecoveryPolicyStatement,
+) -> RecoveryPolicyEvidence:
+    return RecoveryPolicyEvidence(
+        revision=policy.revision,
+        identity_sequence=policy.identity_sequence,
+        current_public_key_multibase=policy.current_public_key_multibase,
+        recovery_public_key_multibase=policy.recovery_public_key_multibase,
+        payload=policy.statement_payload,
+        active_signature_multibase=policy.active_signature_multibase,
+        recovery_signature_multibase=policy.recovery_signature_multibase,
     )
 
 
@@ -192,6 +262,11 @@ def export_identity_lineage(
         raise HTTPException(status_code=404, detail="Cryptographic identity not bound")
     key_state = ensure_key_state(identity, db)
     policy = db.get(AgentRecoveryPolicy, agent.id)
+    policy_history = db.scalars(
+        select(AgentRecoveryPolicyStatement)
+        .where(AgentRecoveryPolicyStatement.agent_id == agent.id)
+        .order_by(AgentRecoveryPolicyStatement.revision)
+    ).all()
     rotations = db.scalars(
         select(AgentKeyTransition).where(AgentKeyTransition.agent_id == agent.id)
     ).all()
@@ -199,17 +274,22 @@ def export_identity_lineage(
         select(AgentRecoveryTransition).where(AgentRecoveryTransition.agent_id == agent.id)
     ).all()
 
-    if recoveries and policy is None:
+    policy_revisions = {item.revision for item in policy_history}
+    missing_revisions = sorted(
+        {item.policy_revision for item in recoveries if item.policy_revision not in policy_revisions}
+    )
+    if missing_revisions:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Recovery history cannot be exported without recovery policy evidence",
+            detail=(
+                "Historical recovery policy evidence is unavailable for revisions: "
+                + ", ".join(str(item) for item in missing_revisions)
+            ),
         )
-    if policy is not None and any(
-        item.policy_revision != policy.revision for item in recoveries
-    ):
+    if policy is not None and policy.revision not in policy_revisions:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Historical recovery policy evidence is not retained by lineage v1",
+            detail="Current recovery policy is missing immutable policy history",
         )
 
     transitions = [
@@ -239,24 +319,17 @@ def export_identity_lineage(
     ]
     transitions.sort(key=lambda item: item.sequence)
 
-    policy_evidence = None
-    if policy is not None:
-        policy_evidence = RecoveryPolicyEvidence(
-            revision=policy.revision,
-            identity_sequence=_int_field(policy.statement_payload, "identity_sequence"),
-            current_public_key_multibase=_field(policy.statement_payload, "current_key"),
-            recovery_public_key_multibase=policy.recovery_public_key_multibase,
-            payload=policy.statement_payload,
-            active_signature_multibase=policy.active_signature_multibase,
-            recovery_signature_multibase=policy.recovery_signature_multibase,
-        )
+    policy_evidence = _policy_evidence_from_current(policy) if policy is not None else None
+    portable_history = [_policy_evidence_from_statement(item) for item in policy_history]
 
     result = PortableIdentityLineage(
+        version=2,
         root_fingerprint=key_state.root_fingerprint,
         root_public_key_multibase=key_state.root_public_key_multibase,
         current_public_key_multibase=key_state.current_public_key_multibase,
         sequence=key_state.sequence,
         recovery_policy=policy_evidence,
+        recovery_policies=portable_history,
         transitions=transitions,
     )
     db.commit()
