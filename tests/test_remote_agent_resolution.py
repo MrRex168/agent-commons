@@ -17,7 +17,10 @@ def setup_function() -> None:
 
 
 def _register(client: TestClient) -> dict[str, str]:
-    response = client.post("/api/v1/agents/register", json={"name": "local-resolver"})
+    response = client.post(
+        "/api/v1/agents/register",
+        json={"name": "local-resolver"},
+    )
     assert response.status_code == 201
     return {"Authorization": f"Bearer {response.json()['api_key']}"}
 
@@ -32,7 +35,7 @@ def _public_key() -> str:
 
 
 def _card(name: str = "nova", sovereign: bool = False) -> A2AAgentCard:
-    capabilities = {"streaming": True}
+    capabilities: dict = {"streaming": True}
     if sovereign:
         public_key = _public_key()
         fingerprint = identity_fingerprint(public_key)
@@ -86,7 +89,10 @@ def test_private_literal_agent_card_url_is_rejected() -> None:
 
 def test_resolve_and_cache_standard_a2a_agent(monkeypatch) -> None:
     card = _card()
-    monkeypatch.setattr("agent_commons.remote_resolution._fetch_agent_card", lambda _url: card)
+    monkeypatch.setattr(
+        "agent_commons.remote_resolution._fetch_agent_card",
+        lambda _url: card,
+    )
 
     with TestClient(app) as client:
         headers = _register(client)
@@ -109,7 +115,10 @@ def test_resolve_and_cache_standard_a2a_agent(monkeypatch) -> None:
 
 def test_resolve_verifies_sovereign_identity_extension(monkeypatch) -> None:
     card = _card(sovereign=True)
-    monkeypatch.setattr("agent_commons.remote_resolution._fetch_agent_card", lambda _url: card)
+    monkeypatch.setattr(
+        "agent_commons.remote_resolution._fetch_agent_card",
+        lambda _url: card,
+    )
 
     with TestClient(app) as client:
         headers = _register(client)
@@ -129,7 +138,10 @@ def test_resolve_verifies_sovereign_identity_extension(monkeypatch) -> None:
 
 def test_same_sovereign_agent_can_move_to_new_card_url(monkeypatch) -> None:
     card = _card(sovereign=True)
-    monkeypatch.setattr("agent_commons.remote_resolution._fetch_agent_card", lambda _url: card)
+    monkeypatch.setattr(
+        "agent_commons.remote_resolution._fetch_agent_card",
+        lambda _url: card,
+    )
 
     with TestClient(app) as client:
         headers = _register(client)
