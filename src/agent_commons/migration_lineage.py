@@ -22,7 +22,11 @@ from agent_commons.migration import (
 from agent_commons.migration_models import AgentMigrationChallenge
 from agent_commons.models import Agent, AgentCryptographicIdentity, AgentMemory
 from agent_commons.profile_models import AgentStructuredProfile
-from agent_commons.recovery_models import AgentRecoveryPolicy, AgentRecoveryTransition
+from agent_commons.recovery_models import (
+    AgentRecoveryPolicy,
+    AgentRecoveryPolicyStatement,
+    AgentRecoveryTransition,
+)
 from agent_commons.rotation_models import AgentIdentityKeyState, AgentKeyTransition
 from agent_commons.schemas import (
     AgentCryptographicIdentityProfile,
@@ -105,6 +109,12 @@ def _verify_package(envelope: SignedPortableStateEnvelope, lineage: PortableIden
     return state, state_sequence, verified
 
 
+def _portable_policy_history(lineage: PortableIdentityLineage):
+    if lineage.version == 1:
+        return [lineage.recovery_policy] if lineage.recovery_policy is not None else []
+    return lineage.recovery_policies
+
+
 def _persist_lineage(
     agent_id: uuid.UUID,
     lineage: PortableIdentityLineage,
@@ -158,6 +168,26 @@ def _persist_lineage(
                     created_at=now,
                 )
             )
+
+    for policy in _portable_policy_history(lineage):
+        if policy is None:
+            continue
+        db.add(
+            AgentRecoveryPolicyStatement(
+                agent_id=agent_id,
+                revision=policy.revision,
+                identity_sequence=policy.identity_sequence,
+                current_public_key_multibase=policy.current_public_key_multibase,
+                recovery_public_key_multibase=policy.recovery_public_key_multibase,
+                recovery_fingerprint=identity_fingerprint(
+                    policy.recovery_public_key_multibase
+                ),
+                statement_payload=policy.payload,
+                active_signature_multibase=policy.active_signature_multibase,
+                recovery_signature_multibase=policy.recovery_signature_multibase,
+                created_at=now,
+            )
+        )
 
     if lineage.recovery_policy is not None:
         policy = lineage.recovery_policy
