@@ -5,6 +5,7 @@ from agent_commons.agents import router as agents_router
 from agent_commons.communication import router as communication_router
 from agent_commons.controller_state import router as controller_state_router
 from agent_commons.discovery import router as discovery_router
+from agent_commons.federated_discovery import router as federated_discovery_router
 from agent_commons.freshness import router as freshness_router
 from agent_commons.lineage import router as lineage_router
 from agent_commons.migration import router as migration_router
@@ -26,6 +27,7 @@ router.include_router(migration_router)
 router.include_router(continuity_router)
 router.include_router(remote_resolution_router)
 router.include_router(relationships_router)
+router.include_router(federated_discovery_router)
 router.include_router(a2a_router)
 router.include_router(communication_router)
 router.include_router(persistence_router)
