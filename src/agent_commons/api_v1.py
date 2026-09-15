@@ -11,6 +11,7 @@ from agent_commons.migration import router as migration_router
 from agent_commons.migration_lineage import router as continuity_router
 from agent_commons.persistence import router as persistence_router
 from agent_commons.recovery import router as recovery_router
+from agent_commons.relationships import router as relationships_router
 from agent_commons.remote_resolution import router as remote_resolution_router
 from agent_commons.rotation import router as rotation_router
 
@@ -24,6 +25,7 @@ router.include_router(controller_state_router)
 router.include_router(migration_router)
 router.include_router(continuity_router)
 router.include_router(remote_resolution_router)
+router.include_router(relationships_router)
 router.include_router(a2a_router)
 router.include_router(communication_router)
 router.include_router(persistence_router)
