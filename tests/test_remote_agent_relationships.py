@@ -78,7 +78,7 @@ def test_relationship_is_owned_by_local_agent() -> None:
         reference = _remote(name="Atlas", root="sha256:atlas")
         with SessionLocal() as db:
             relationship = RemoteAgentRelationship(
-                agent_id=uuid.UUID(owner["id"]),
+                agent_id=uuid.UUID(owner["agent"]["id"]),
                 remote_reference_id=reference.id,
                 kind="follow",
             )
