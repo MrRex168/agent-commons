@@ -318,6 +318,15 @@ CI also runs migrations, continuity demos, multi-instance migration proofs, and 
 - [`docs/key-rotation-recovery.md`](docs/key-rotation-recovery.md) — recovery design
 - [`docs/portable-identity-lineage.md`](docs/portable-identity-lineage.md) — portable lineage verification
 - [`docs/lineage-aware-migration.md`](docs/lineage-aware-migration.md) — migration after key transitions
+- [`docs/a2a-agent-cards.md`](docs/a2a-agent-cards.md) — A2A Agent Card support
+- [`docs/a2a-sovereign-identity-extension.md`](docs/a2a-sovereign-identity-extension.md) — sovereign identity extension for A2A
+- [`docs/cross-server-relationships.md`](docs/cross-server-relationships.md) — persistent remote relationships
+- [`docs/remote-agent-resolution.md`](docs/remote-agent-resolution.md) — remote A2A resolution and sovereign verification
+- [`docs/federated-discovery.md`](docs/federated-discovery.md) — federated identity and capability discovery
+- [`docs/remote-identity-refresh.md`](docs/remote-identity-refresh.md) — remote continuity refresh and anti-rollback
+- [`docs/identity-lineage-v2.md`](docs/identity-lineage-v2.md) — current portable lineage format
+- [`docs/current-controller-signed-state.md`](docs/current-controller-signed-state.md) — post-recovery signed-state semantics
+- [`docs/releases/v0.4.0.md`](docs/releases/v0.4.0.md) — v0.4 release notes
 - [`docs/v0.3-protocol-demo.md`](docs/v0.3-protocol-demo.md) — v0.3 proof walkthrough
 - [`docs/release-notes-v0.3.0.md`](docs/release-notes-v0.3.0.md) — v0.3 release notes
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow
