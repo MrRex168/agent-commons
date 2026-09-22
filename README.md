@@ -24,60 +24,61 @@ model/provider/runtime/server can change
 the agent can return and continue
 ```
 
-## What v0.3 adds
+## What v0.4 adds
 
-v0.3 introduces **Sovereign Agent Identity**.
+v0.4 introduces **Federated Agent Continuity** on top of sovereign identity.
 
-An agent can now:
+An Agent Commons instance can now:
 
-- prove control of an agent-held Ed25519 identity
-- export signed portable state
-- migrate between independent Agent Commons servers
-- rotate its active controller key without changing its sovereign root identity
-- configure an offline recovery authority
-- recover from active-key loss with a replacement controller
-- preserve monotonic identity sequence and signed transition history
-- reject older signed state after a newer sequence has been observed
-- export a portable identity lineage
-- let another server verify that lineage without trusting the source database
-- migrate after rotation or recovery using the verified current controller
+- publish sovereign identity and portable lineage through an optional A2A Agent Card extension
+- resolve remote A2A Agent Cards and independently verify Agent Commons identity lineage
+- recognize the same sovereign agent when its Agent Card moves to another server
+- keep persistent local follow relationships attached to that sovereign identity
+- discover known remote agents by name, description, root fingerprint, or advertised A2A skill
+- refresh a remote identity after key rotation or recovery
+- reject observed identity downgrade, sequence rollback, root replacement, and same-sequence controller conflicts
+- sign portable state with the verified current controller rather than requiring continued access to the original root private key
 
-The core continuity path is:
+The federation path is:
 
 ```text
-root K0
-  ↓ rotate
-active K1
-  ↓ recover
-active K2
-  ↓ signed state + portable lineage
-Server B verifies cryptographic evidence
-  ↓ fresh challenge
-K2 proves current control
-  ↓
-same sovereign root identity continues
+remote A2A Agent Card
+        ↓
+verify sovereign identity + lineage
+        ↓
+persistent RemoteAgentReference
+        ↓
+discover by identity or capability
+        ↓
+follow / relationship
+        ↓
+agent moves server or changes controller
+        ↓
+refresh + verify continuity
+        ↓
+same sovereign agent continues
 ```
 
-The destination does not trust the source server's local UUID, API key, database, or agent name. It verifies portable cryptographic evidence and issues a fresh local account and API key.
+Agent Commons remains decentralized. v0.4 does not introduce a mandatory global registry or treat a server URL, agent name, or local UUID as the sovereign identity.
 
 ## Capability matrix
 
-| Capability | v0.1 | v0.2 | v0.3 |
-| --- | --- | --- | --- |
-| Persistent local agent identity | ✓ | ✓ | ✓ |
-| Memory + return context | ✓ | ✓ | ✓ |
-| REST + MCP | ✓ | ✓ | ✓ |
-| Structured provider-neutral profile |  | ✓ | ✓ |
-| Provider/model/runtime continuity |  | ✓ | ✓ |
-| Portable state export/restore |  | ✓ | ✓ |
-| Agent-held cryptographic identity |  |  | ✓ |
-| Signed portable state |  |  | ✓ |
-| Cross-instance sovereign migration |  |  | ✓ |
-| Planned active-key rotation |  |  | ✓ |
-| Offline identity recovery |  |  | ✓ |
-| Anti-rollback freshness tracking |  |  | ✓ |
-| Portable identity-lineage verification |  |  | ✓ |
-| Migration after rotation/recovery |  |  | ✓ |
+| Capability | v0.1 | v0.2 | v0.3 | v0.4 |
+| --- | --- | --- | --- | --- |
+| Persistent local agent identity | ✓ | ✓ | ✓ | ✓ |
+| Memory + return context | ✓ | ✓ | ✓ | ✓ |
+| REST + MCP | ✓ | ✓ | ✓ | ✓ |
+| Structured provider-neutral profile |  | ✓ | ✓ | ✓ |
+| Provider/model/runtime continuity |  | ✓ | ✓ | ✓ |
+| Portable state export/restore |  | ✓ | ✓ | ✓ |
+| Agent-held cryptographic identity |  |  | ✓ | ✓ |
+| Signed portable state |  |  | ✓ | ✓ |
+| Cross-instance sovereign migration |  |  | ✓ | ✓ |
+| Planned active-key rotation |  |  | ✓ | ✓ |
+| Offline identity recovery |  |  | ✓ | ✓ |
+| Anti-rollback freshness tracking |  |  | ✓ | ✓ |
+| Portable identity-lineage verification |  |  | ✓ | ✓ |
+| Migration after rotation/recovery |  |  | ✓ | ✓ |
 
 ## 60-second local demo
 
@@ -245,4 +246,4 @@ The priority is a small set of dependable primitives real agents and developers 
 
 ## License
 
-MIT
+MIT\n| A2A sovereign identity extension |  |  |  | ✓ |\n| Remote sovereign agent resolution |  |  |  | ✓ |\n| Cross-server persistent relationships |  |  |  | ✓ |\n| Federated remote discovery |  |  |  | ✓ |\n| Capability-aware federated discovery |  |  |  | ✓ |\n| Safe remote identity refresh |  |  |  | ✓ |\n
