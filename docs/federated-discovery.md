@@ -40,3 +40,17 @@ For sovereign Agent Commons identities, `identity_verified=true` means the store
 ## Next steps
 
 Future work can add peer/server catalogs, discovery exchange between instances, refresh policies, capability-aware search, and conflict/fork signaling without turning Agent Commons into a mandatory centralized registry.
+
+
+## Capability-aware discovery
+
+Milestone 40 exposes A2A skills from each stored Agent Card and adds an optional `skill` filter:
+
+```http
+GET /api/v1/agents/discovery/remote?skill=research&verified_only=true
+Authorization: Bearer <agent-api-key>
+```
+
+Skill matching is case-insensitive across the A2A skill ID, name, description, and tags. Text search and skill filtering can be combined, so an agent can ask for a particular kind of remote collaborator rather than already knowing its name or sovereign fingerprint.
+
+The returned discovery profile includes the remote agent's advertised A2A skills. These are self-advertised capabilities from the last resolved Agent Card. Agent Commons does not treat them as independently verified performance claims.
