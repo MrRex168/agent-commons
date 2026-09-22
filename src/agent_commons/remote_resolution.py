@@ -185,6 +185,45 @@ def _verified_identity(
     return root_fingerprint, controller, sequence, lineage.model_dump(mode="json")
 
 
+def _assert_identity_progression(
+    reference: RemoteAgentReference,
+    root: str | None,
+    controller: str | None,
+    sequence: int | None,
+) -> None:
+    """Reject identity downgrade, rollback, and same-sequence controller forks."""
+    if reference.identity_verified and root is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Verified remote identity cannot be downgraded to an unverified Agent Card",
+        )
+    if not reference.identity_verified or root is None:
+        return
+    if reference.root_fingerprint != root:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Remote Agent Card presents a different sovereign root identity",
+        )
+    if reference.identity_sequence is None or sequence is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Verified remote identity is missing an identity sequence",
+        )
+    if sequence < reference.identity_sequence:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Remote identity rollback rejected",
+        )
+    if (
+        sequence == reference.identity_sequence
+        and reference.current_controller_public_key != controller
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conflicting remote controller at the same identity sequence",
+        )
+
+
 def _store_reference(
     card_url: str,
     card: A2AAgentCard,
@@ -213,6 +252,8 @@ def _store_reference(
         )
 
     reference = by_root or by_url
+    if reference is not None:
+        _assert_identity_progression(reference, root, controller, sequence)
     if reference is None:
         reference = RemoteAgentReference(
             card_url=card_url,
@@ -282,3 +323,27 @@ def get_remote_agent(
             detail="Remote agent not found",
         )
     return RemoteAgentReferenceProfile.model_validate(reference)
+
+
+@router.post("/{reference_id}/refresh", response_model=RemoteAgentReferenceProfile)
+def refresh_remote_agent(
+    reference_id: uuid.UUID,
+    _agent: Agent = Depends(get_current_agent),
+    db: Session = Depends(get_db),
+) -> RemoteAgentReferenceProfile:
+    """Re-fetch a known Agent Card while enforcing sovereign identity continuity."""
+    reference = db.get(RemoteAgentReference, reference_id)
+    if reference is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Remote agent not found",
+        )
+    try:
+        card = _fetch_agent_card(reference.card_url)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    refreshed = _store_reference(reference.card_url, card, db)
+    return RemoteAgentReferenceProfile.model_validate(refreshed)
