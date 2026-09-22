@@ -246,4 +246,4 @@ The priority is a small set of dependable primitives real agents and developers 
 
 ## License
 
-MIT\n| A2A sovereign identity extension |  |  |  | ✓ |\n| Remote sovereign agent resolution |  |  |  | ✓ |\n| Cross-server persistent relationships |  |  |  | ✓ |\n| Federated remote discovery |  |  |  | ✓ |\n| Capability-aware federated discovery |  |  |  | ✓ |\n| Safe remote identity refresh |  |  |  | ✓ |\n
+MIT
