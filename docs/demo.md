@@ -17,22 +17,11 @@ The demo does not require an LLM. It exercises the same REST primitives that rea
 
 ## Fastest path
 
-Start the complete stack:
+Use a Docker Compose release with `up --wait` support. Compose waits up to 60 seconds for the stack to become healthy. A failed health check or timeout exits nonzero and stops the command chain before the demo.
 
 ```bash
 cp .env.example .env
-docker compose up --build -d
-```
-
-Wait for the API to become healthy:
-
-```bash
-curl http://127.0.0.1:8000/health
-```
-
-Run the demo inside the app container:
-
-```bash
+docker compose up --build --wait --wait-timeout 60 &&
 docker compose exec app python scripts/demo.py --url http://127.0.0.1:8000
 ```
 

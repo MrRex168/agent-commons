@@ -1,3 +1,5 @@
+from importlib.metadata import version
+
 from fastapi.testclient import TestClient
 
 from agent_commons.main import app
@@ -21,3 +23,10 @@ def test_api_v1_health() -> None:
         "service": "agent-commons",
         "api_version": "v1",
     }
+
+
+def test_openapi_reports_installed_package_version() -> None:
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    assert response.json()["info"]["version"] == version("agent-commons")

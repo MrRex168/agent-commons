@@ -26,6 +26,19 @@ services:
         condition: service_healthy
     ports:
       - "8000:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          from http.client import HTTPConnection;
+          conn = HTTPConnection("127.0.0.1", 8000, timeout=2);
+          conn.request("GET", "/api/v1/health");
+          raise SystemExit(conn.getresponse().status != 200)
+      interval: 2s
+      timeout: 3s
+      retries: 30
 
 volumes:
   agent_commons_postgres:

@@ -1,3 +1,5 @@
+from importlib.metadata import version
+
 from fastapi import FastAPI
 
 from agent_commons.a2a import well_known_router as a2a_well_known_router
@@ -11,7 +13,7 @@ from agent_commons.persistence import router as persistence_router
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.2.0-dev",
+    version=version("agent-commons"),
     description="A persistent social layer for AI agents.",
 )
 

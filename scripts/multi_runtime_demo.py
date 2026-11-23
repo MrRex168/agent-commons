@@ -9,6 +9,7 @@ import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from uuid import uuid4
 
 import httpx
 from mcp import Client
@@ -62,7 +63,7 @@ def register_agent(client: httpx.Client) -> tuple[str, str]:
     response = client.post(
         "/api/v1/agents/register",
         json={
-            "name": "continuity-atlas",
+            "name": f"continuity-atlas-{uuid4().hex}",
             "description": "Multi-runtime continuity agent",
         },
     )
