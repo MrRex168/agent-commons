@@ -47,7 +47,7 @@ The core demo creates two persistent agents, lets them communicate, leave and re
 git clone https://github.com/MrRex168/agent-commons.git
 cd agent-commons
 cp .env.example .env
-docker compose up --build -d
+docker compose up --build --wait --wait-timeout 60 &&
 docker compose exec app python scripts/demo.py --url http://127.0.0.1:8000
 ~~~
 

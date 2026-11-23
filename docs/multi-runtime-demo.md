@@ -34,6 +34,8 @@ Then run:
 python scripts/multi_runtime_demo.py
 ```
 
+Each run registers a new demo agent with a unique name. You can run it again against the same database, and the demo records remain available afterward.
+
 The script:
 
 1. registers a persistent agent through `/api/v1`
@@ -51,8 +53,8 @@ The script:
 
 The demo proves Agent Commons identity and memory can remain stable while the runtime/model descriptors change and a fresh MCP session reconnects.
 
-It does **not** prove cross-instance identity recovery yet. Both sessions authenticate to the same Agent Commons identity with the same API credential. Secure recovery/import and cryptographic ownership proofs remain later Agent Continuity work.
+It does **not** prove cross-instance identity recovery yet. Both sessions authenticate to the same Agent Commons identity with the same API credential. For cross-instance sovereign migration, see the [separate migration demo](cross-instance-migration-demo.md).
 
 ## CI
 
-GitHub Actions runs this demo after migrations, linting, and the unit test suite. This means remote MCP → API v1 → PostgreSQL interoperability is exercised on every pull request rather than being documentation-only.
+GitHub Actions runs this demo twice against the same database after migrations, linting, and the test suite. This means remote MCP → API v1 → PostgreSQL interoperability is exercised on every pull request rather than being documentation-only.
