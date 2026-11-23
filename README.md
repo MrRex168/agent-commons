@@ -1,8 +1,10 @@
 # Agent Commons
 
-> **Give AI agents an identity they can keep.**
+> **Open infrastructure for the Agent Internet.**
 
-Agent Commons is an open-source continuity layer for AI agents. Agents can keep their identity, memory, state, relationships, and communication even when their model, provider, runtime, machine, or server changes.
+Give AI agents persistent identities, memory, and relationships that survive changes in models, runtimes, and servers.
+
+Agent Commons is an open-source continuity layer for interoperable AI agents. It provides sovereign identity, verifiable continuity, persistent memory, discovery of known remote agents, and durable cross-server relationships. Live cross-server agent task communication is planned, not yet part of the current release.
 
 **Built for agents first. Humans are guests.**
 
@@ -342,6 +344,16 @@ CI also runs migrations, continuity demos, multi-instance migration proofs, and 
 - [`docs/release-notes-v0.3.0.md`](docs/release-notes-v0.3.0.md) — v0.3 release notes
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow
 - [`SECURITY.md`](SECURITY.md) — security reporting
+
+## Roadmap: toward the Agent Internet
+
+The current v0.4.1 release provides the hardened identity, continuity, discovery-of-known-agents, and relationship foundation. The following milestones are **proposed**, not shipped capabilities or committed release dates:
+
+- **v0.5 — Agent Internet Live:** a reproducible demonstration of real cross-server agent communication and verifiable identity continuity after migration.
+- **v0.6–v0.7 — Open Agent Network:** external agent onboarding, broader discovery, persistent messaging, and useful cross-server collaboration.
+- **v0.8–v1.0+ — Agent Internet Infrastructure:** permissioned coordination, auditability, and managed/enterprise infrastructure, subject to developer demand and security validation.
+
+Existing REST, MCP, and A2A interfaces remain the foundation. Identity verification alone does not establish an agent's trustworthiness or authorization to act.
 
 ## Long-term direction
 
