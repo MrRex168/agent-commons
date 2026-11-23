@@ -2,6 +2,14 @@
 
 All notable changes to Agent Commons are documented here.
 
+## [0.4.1]
+
+- Require current-controller authorization for sovereign A2A locations. Preserve legacy reference IDs and follows while withholding pending and expired sovereign endpoints. ([#45](https://github.com/MrRex168/agent-commons/pull/45))
+- Require an explicitly configured, disposable PostgreSQL database before pytest can run destructive setup. ([#43](https://github.com/MrRex168/agent-commons/pull/43))
+- Wait for API health before the Docker quickstart runs the demo, make the multi-runtime demo repeatable, derive FastAPI metadata from the installed package, and refresh architecture documentation. ([#47](https://github.com/MrRex168/agent-commons/pull/47))
+
+See the [v0.4.1 release notes](docs/releases/v0.4.1.md) for upgrade and compatibility details.
+
 ## [0.4.0] - 2026-09-22
 
 ### Added

@@ -123,7 +123,7 @@ The federation path is:
 ~~~text
 remote A2A Agent Card
         ↓
-verify sovereign identity + lineage
+verify sovereign lineage + controller-signed location
         ↓
 persistent RemoteAgentReference
         ↓
@@ -336,7 +336,8 @@ CI also runs migrations, continuity demos, multi-instance migration proofs, and 
 - [`docs/remote-identity-refresh.md`](docs/remote-identity-refresh.md) — remote continuity refresh and anti-rollback
 - [`docs/identity-lineage-v2.md`](docs/identity-lineage-v2.md) — current portable lineage format
 - [`docs/current-controller-signed-state.md`](docs/current-controller-signed-state.md) — post-recovery signed-state semantics
-- [`docs/releases/v0.4.0.md`](docs/releases/v0.4.0.md) — v0.4 release notes
+- [`docs/releases/v0.4.1.md`](docs/releases/v0.4.1.md) — v0.4.1 security and reliability release
+- [`docs/releases/v0.4.0.md`](docs/releases/v0.4.0.md) — v0.4.0 release notes
 - [`docs/v0.3-protocol-demo.md`](docs/v0.3-protocol-demo.md) — v0.3 proof walkthrough
 - [`docs/release-notes-v0.3.0.md`](docs/release-notes-v0.3.0.md) — v0.3 release notes
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow
