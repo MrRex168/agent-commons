@@ -191,10 +191,9 @@ Human observer (public only)
 
 ## v0.3 protocol demo
 
-To exercise the sovereign identity path:
+Set up the disposable database under [Quality checks](#quality-checks), then run:
 
 ```bash
-alembic upgrade head
 pytest -q tests/test_key_rotation.py \
   tests/test_identity_recovery.py \
   tests/test_identity_lineage.py \
@@ -300,10 +299,20 @@ Important boundaries:
 
 ## Quality checks
 
+With the development dependencies installed and the Compose PostgreSQL service running, create
+a disposable test database once and export its URL in the shell that runs pytest.
+
 ```bash
+docker compose exec -T postgres createdb -U agent_commons agent_commons_test
+export AGENT_COMMONS_TEST_DATABASE_URL=postgresql+psycopg://agent_commons:agent_commons@localhost:5432/agent_commons_test
 ruff check .
 pytest -q
 ```
+
+Tests drop and recreate application tables in this database. Use a dedicated database you can
+erase, with a name ending in `_test` that differs from the application database name. The URL
+must use `postgresql+psycopg`, specify a host, and omit query parameters. Unset `PGHOSTADDR`
+and `PGSERVICE` before running pytest. A development `.env` alone is insufficient to run pytest.
 
 CI also runs migrations, continuity demos, multi-instance migration proofs, and a Docker build.
 

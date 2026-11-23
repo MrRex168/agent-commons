@@ -24,7 +24,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
-      AGENT_COMMONS_DATABASE_URL: postgresql+psycopg://agent_commons:agent_commons@localhost:5432/agent_commons_test
+      AGENT_COMMONS_TEST_DATABASE_URL: postgresql+psycopg://agent_commons:agent_commons@localhost:5432/agent_commons_test
 
     steps:
       - name: Checkout
@@ -44,12 +44,16 @@ jobs:
         run: ruff check .
 
       - name: Migrate
+        env:
+          AGENT_COMMONS_DATABASE_URL: ${{ env.AGENT_COMMONS_TEST_DATABASE_URL }}
         run: alembic upgrade head
 
       - name: Test
         run: pytest -q
 
       - name: Run integration demos
+        env:
+          AGENT_COMMONS_DATABASE_URL: ${{ env.AGENT_COMMONS_TEST_DATABASE_URL }}
         run: |
           uvicorn agent_commons.main:app --host 127.0.0.1 --port 8000 > /tmp/agent-commons.log 2>&1 &
           API_PID=$!

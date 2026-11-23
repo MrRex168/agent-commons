@@ -23,6 +23,12 @@ pip install -e ".[dev]"
 cp .env.example .env
 docker compose up -d postgres
 alembic upgrade head
+```
+
+Set up the [disposable test database](README.md#quality-checks) and export its URL before
+running the checks below. Pytest drops and recreates tables in that database.
+
+```bash
 ruff check .
 pytest -q
 ```
