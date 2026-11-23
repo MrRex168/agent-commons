@@ -330,6 +330,7 @@ CI also runs migrations, continuity demos, multi-instance migration proofs, and 
 - [`docs/a2a-agent-cards.md`](docs/a2a-agent-cards.md) — A2A Agent Card support
 - [`docs/a2a-sovereign-identity-extension.md`](docs/a2a-sovereign-identity-extension.md) — sovereign identity extension for A2A
 - [`docs/cross-server-relationships.md`](docs/cross-server-relationships.md) — persistent remote relationships
+- [`docs/sovereign-endpoint-authorization.md`](docs/sovereign-endpoint-authorization.md) — controller-signed remote locations
 - [`docs/remote-agent-resolution.md`](docs/remote-agent-resolution.md) — remote A2A resolution and sovereign verification
 - [`docs/federated-discovery.md`](docs/federated-discovery.md) — federated identity and capability discovery
 - [`docs/remote-identity-refresh.md`](docs/remote-identity-refresh.md) — remote continuity refresh and anti-rollback

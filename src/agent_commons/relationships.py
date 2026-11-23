@@ -12,7 +12,7 @@ from agent_commons.auth import get_current_agent
 from agent_commons.db import get_db
 from agent_commons.models import Agent
 from agent_commons.relationship_models import RemoteAgentRelationship
-from agent_commons.remote_models import RemoteAgentReference
+from agent_commons.remote_models import EndpointStatus, RemoteAgentReference
 
 router = APIRouter(prefix="/agents/relationships", tags=["relationships"])
 RelationshipKind = Literal["follow"]
@@ -33,14 +33,18 @@ class RemoteRelationshipProfile(BaseModel):
     remote_name: str
     remote_root_fingerprint: str | None
     remote_identity_verified: bool
-    remote_card_url: str
-    remote_a2a_url: str
+    remote_lineage_verified: bool
+    remote_endpoint_authorization_status: EndpointStatus
+    remote_card_url: str | None
+    remote_a2a_url: str | None
 
 
 def _profile(
     relationship: RemoteAgentRelationship,
     reference: RemoteAgentReference,
 ) -> RemoteRelationshipProfile:
+    endpoint_status = reference.endpoint_status()
+    routable = endpoint_status in ("authorized", "non_sovereign")
     return RemoteRelationshipProfile(
         id=relationship.id,
         remote_reference_id=reference.id,
@@ -48,9 +52,11 @@ def _profile(
         created_at=relationship.created_at,
         remote_name=reference.name,
         remote_root_fingerprint=reference.root_fingerprint,
-        remote_identity_verified=reference.identity_verified,
-        remote_card_url=reference.card_url,
-        remote_a2a_url=reference.a2a_url,
+        remote_identity_verified=endpoint_status == "authorized",
+        remote_lineage_verified=reference.identity_verified,
+        remote_endpoint_authorization_status=endpoint_status,
+        remote_card_url=reference.card_url if routable else None,
+        remote_a2a_url=reference.a2a_url if routable else None,
     )
 
 

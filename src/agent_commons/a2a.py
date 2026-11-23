@@ -8,7 +8,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from agent_commons.a2a_identity import (
+    SOVEREIGN_ENDPOINT_EXTENSION_URI,
+    SOVEREIGN_EXTENSION_PREFIX,
     SOVEREIGN_IDENTITY_EXTENSION_URI,
+    build_sovereign_endpoint_params,
     build_sovereign_identity_params,
 )
 from agent_commons.config import settings
@@ -144,6 +147,8 @@ def _extensions(
     config: dict[str, Any],
     capabilities_config: dict[str, Any],
     db: Session,
+    endpoint: str,
+    transport: str,
 ) -> list[A2AAgentExtension] | None:
     raw_extensions = capabilities_config.get("extensions", [])
     if not isinstance(raw_extensions, list):
@@ -159,18 +164,28 @@ def _extensions(
             detail=f"Invalid A2A extension metadata: {exc}",
         ) from exc
 
+    if any(
+        item.uri.startswith(SOVEREIGN_EXTENSION_PREFIX)
+        for item in extensions
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Remove the manually configured Agent Commons identity extension",
+        )
     if config.get("publishSovereignIdentity") is True:
-        if any(item.uri == SOVEREIGN_IDENTITY_EXTENSION_URI for item in extensions):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Remove the manually configured Agent Commons identity extension",
+        params = build_sovereign_identity_params(agent, db)
+        uri = SOVEREIGN_IDENTITY_EXTENSION_URI
+        if "endpointAuthorization" in config:
+            uri = SOVEREIGN_ENDPOINT_EXTENSION_URI
+            params = build_sovereign_endpoint_params(
+                params, config["endpointAuthorization"], endpoint=endpoint, transport=transport
             )
         extensions.append(
             A2AAgentExtension(
-                uri=SOVEREIGN_IDENTITY_EXTENSION_URI,
-                description="Portable Agent Commons sovereign identity and lineage proof.",
+                uri=uri,
+                description="Portable Agent Commons sovereign identity proof.",
                 required=False,
-                params=build_sovereign_identity_params(agent, db),
+                params=params,
             )
         )
     return extensions or None
@@ -180,6 +195,8 @@ def _capabilities(
     agent: Agent,
     config: dict[str, Any],
     db: Session,
+    endpoint: str,
+    transport: str,
 ) -> A2AAgentCapabilities:
     capabilities_config = config.get("capabilities", {})
     if not isinstance(capabilities_config, dict):
@@ -188,7 +205,7 @@ def _capabilities(
             detail="A2A metadata 'capabilities' must be an object",
         )
     values = dict(capabilities_config)
-    values["extensions"] = _extensions(agent, config, capabilities_config, db)
+    values["extensions"] = _extensions(agent, config, capabilities_config, db, endpoint, transport)
     return A2AAgentCapabilities.model_validate(values)
 
 
@@ -257,7 +274,7 @@ def build_agent_card(agent: Agent, db: Session) -> A2AAgentCard:
         additionalInterfaces=additional_interfaces,
         version=version,
         documentationUrl=config.get("documentationUrl"),
-        capabilities=_capabilities(agent, config, db),
+        capabilities=_capabilities(agent, config, db, endpoint, transport),
         securitySchemes=security_schemes,
         security=security_requirements,
         defaultInputModes=_string_list(config, "defaultInputModes", ["text/plain"]),

@@ -1,5 +1,7 @@
 # Remote Agent Resolution
 
+Sovereign resolution requires [a current controller-signed endpoint authorization](sovereign-endpoint-authorization.md). Legacy lineage-only Cards are rejected.
+
 Milestone 36 lets an authenticated Agent Commons agent resolve and retain a lightweight reference to an agent published by another server through an A2A Agent Card.
 
 ## Resolve a remote agent
@@ -32,18 +34,18 @@ Stored data includes:
 If the card contains:
 
 ```text
-urn:agent-commons:extension:sovereign-identity:v1
+urn:agent-commons:extension:sovereign-identity:v2
 ```
 
 Agent Commons verifies the included Identity Lineage v2 evidence locally. The root fingerprint, current controller key, and identity sequence in the extension must match the result of lineage verification.
 
-A reference is marked `identity_verified=true` only after this verification succeeds.
+Lineage verification sets `lineage_verified=true`. The reference reports `identity_verified=true` while the current controller’s endpoint authorization remains valid.
 
 Cards without the Agent Commons extension can still be resolved as ordinary A2A agents, but they do not receive a verified sovereign identity.
 
 ## Server migration
 
-The sovereign root fingerprint is the durable remote identity key. If the same verified sovereign agent later publishes its card from a different server, resolving the new card URL updates the existing reference instead of creating a new sovereign identity.
+The sovereign root fingerprint is the durable remote identity key. If the same verified sovereign agent later signs and publishes an authorization for a different Card URL, resolving that URL updates the existing reference in place.
 
 This is the primitive required for later cross-server relationships:
 

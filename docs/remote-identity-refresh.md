@@ -9,7 +9,7 @@ POST /api/v1/agents/remote/{reference_id}/refresh
 Authorization: Bearer <agent-api-key>
 ```
 
-Agent Commons re-fetches the reference's existing Agent Card URL, validates the A2A card and sovereign identity lineage, and updates the stored reference only when identity continuity is valid.
+Agent Commons re-fetches the reference's existing Agent Card URL, validates the A2A Card, sovereign identity lineage, and [controller-signed endpoint authorization](sovereign-endpoint-authorization.md) before updating the stored reference.
 
 ## Continuity rules
 
@@ -21,7 +21,7 @@ For an already verified sovereign remote identity, refresh is fail-closed:
 - the current controller cannot change without a higher identity sequence;
 - a higher sequence with valid lineage can advance the stored controller after planned rotation or recovery.
 
-An unverified URL-based reference may upgrade to a verified sovereign identity when the same Agent Card URL later publishes a valid Agent Commons identity extension.
+An unverified URL-based reference may upgrade to a verified sovereign identity when the same Agent Card URL later publishes valid lineage and a current controller-signed endpoint authorization.
 
 ## Why this matters
 

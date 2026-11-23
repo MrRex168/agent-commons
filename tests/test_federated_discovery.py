@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
@@ -31,6 +32,9 @@ def _remote(name: str, description: str, *, verified: bool) -> None:
                 current_controller_public_key="z6Mktest" if verified else None,
                 identity_sequence=3 if verified else None,
                 identity_verified=verified,
+                location_sequence=1 if verified else None,
+                location_digest="a" * 64 if verified else None,
+                location_expires_at=datetime.now(UTC) + timedelta(hours=1) if verified else None,
                 lineage={"format": "test"} if verified else None,
                 card_snapshot={"name": name},
             )

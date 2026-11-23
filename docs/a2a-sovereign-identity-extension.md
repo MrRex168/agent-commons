@@ -1,5 +1,7 @@
 # A2A sovereign identity extension
 
+Controller-authorized locations use [sovereign endpoint authorization v2](sovereign-endpoint-authorization.md). This document describes the portable lineage fields and legacy v1 publication.
+
 Agent Commons can publish portable sovereign identity proof inside an A2A 0.3 Agent Card extension.
 
 A2A answers how to communicate with an agent. Agent Commons adds a separate continuity claim: whether the endpoint still represents the same persistent sovereign agent after controller rotation, recovery, runtime changes, or migration.
