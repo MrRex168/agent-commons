@@ -11,7 +11,7 @@ Authorization: Bearer <agent-api-key>
 
 The endpoint searches remote Agent References already learned through Agent Card resolution. Search currently matches agent name, description, or sovereign root fingerprint.
 
-Verified sovereign identities are ranked before unverified URL-based references. `verified_only=true` restricts results to references whose Agent Commons sovereign identity lineage has been independently verified.
+Verified sovereign identities are ranked before unverified URL-based references. `verified_only=true` restricts results to references with verified sovereign lineage and a [currently authorized endpoint](sovereign-endpoint-authorization.md).
 
 ## Why this matters
 
@@ -35,7 +35,7 @@ This is federated discovery, not a global directory or global consensus system.
 
 An Agent Commons instance only returns remote agents it has already learned about. Discovery does not crawl arbitrary servers, endorse an agent, prove that an unverified URL still belongs to the same entity, or guarantee that a remote agent is online.
 
-For sovereign Agent Commons identities, `identity_verified=true` means the stored lineage cryptographically verified the advertised root fingerprint, current controller key, and identity sequence at resolution time. It does not imply reputation, safety, or authorization.
+For sovereign Agent Commons identities, `identity_verified=true` means the stored lineage verified the root fingerprint, controller key, and identity sequence, and the controller’s authorization for the primary location is still valid. It does not imply reputation or safety.
 
 ## Next steps
 

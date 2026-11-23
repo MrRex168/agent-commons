@@ -1,11 +1,14 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
+from typing import Literal
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from agent_commons.db import Base
+
+EndpointStatus = Literal["non_sovereign", "pending", "authorized", "expired"]
 
 
 class RemoteAgentReference(Base):
@@ -31,6 +34,9 @@ class RemoteAgentReference(Base):
     identity_verified: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
+    location_sequence: Mapped[int | None] = mapped_column(BigInteger)
+    location_digest: Mapped[str | None] = mapped_column(String(64))
+    location_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     lineage: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     card_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
     resolved_at: Mapped[datetime] = mapped_column(
@@ -45,3 +51,12 @@ class RemoteAgentReference(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+    def endpoint_status(self, now: datetime | None = None) -> EndpointStatus:
+        if self.root_fingerprint is None and not self.identity_verified:
+            return "non_sovereign"
+        if not self.identity_verified or self.location_expires_at is None:
+            return "pending"
+        if self.location_expires_at <= (now if now is not None else datetime.now(UTC)):
+            return "expired"
+        return "authorized"

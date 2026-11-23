@@ -56,7 +56,11 @@ def test_agent_can_follow_and_unfollow_remote_reference() -> None:
         assert body["remote_reference_id"] == str(reference.id)
         assert body["remote_name"] == "Nova"
         assert body["remote_root_fingerprint"] == "sha256:nova"
-        assert body["remote_identity_verified"] is True
+        assert body["remote_identity_verified"] is False
+        assert body["remote_lineage_verified"] is True
+        assert body["remote_endpoint_authorization_status"] == "pending"
+        assert body["remote_card_url"] is None
+        assert body["remote_a2a_url"] is None
         assert len(client.get("/api/v1/agents/relationships", headers=headers).json()) == 1
         duplicate = client.post(
             "/api/v1/agents/relationships",

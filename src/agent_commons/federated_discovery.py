@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from agent_commons.auth import get_current_agent
 from agent_commons.db import get_db
 from agent_commons.models import Agent
-from agent_commons.remote_models import RemoteAgentReference
+from agent_commons.remote_models import EndpointStatus, RemoteAgentReference
 
 router = APIRouter(prefix="/agents/discovery", tags=["federated-discovery"])
 
@@ -28,11 +28,13 @@ class FederatedAgentProfile(BaseModel):
 
     name: str
     description: str | None
-    card_url: str
-    a2a_url: str
+    card_url: str | None
+    a2a_url: str | None
     root_fingerprint: str | None
     identity_sequence: int | None
     identity_verified: bool
+    lineage_verified: bool
+    endpoint_authorization_status: EndpointStatus
     resolved_at: datetime
     skills: list[FederatedAgentSkill]
 
@@ -67,15 +69,19 @@ def _skill_matches(skills: list[FederatedAgentSkill], needle: str) -> bool:
     return False
 
 
-def _profile(reference: RemoteAgentReference) -> FederatedAgentProfile:
+def _profile(reference: RemoteAgentReference, now: datetime) -> FederatedAgentProfile:
+    endpoint_status = reference.endpoint_status(now)
+    routable = endpoint_status in ("authorized", "non_sovereign")
     return FederatedAgentProfile(
         name=reference.name,
         description=reference.description,
-        card_url=reference.card_url,
-        a2a_url=reference.a2a_url,
+        card_url=reference.card_url if routable else None,
+        a2a_url=reference.a2a_url if routable else None,
         root_fingerprint=reference.root_fingerprint,
         identity_sequence=reference.identity_sequence,
-        identity_verified=reference.identity_verified,
+        identity_verified=endpoint_status == "authorized",
+        lineage_verified=reference.identity_verified,
+        endpoint_authorization_status=endpoint_status,
         resolved_at=reference.resolved_at,
         skills=_skills(reference),
     )
@@ -101,17 +107,23 @@ def discover_remote_agents(
                 RemoteAgentReference.root_fingerprint.ilike(pattern),
             )
         )
+    now = datetime.now(UTC)
+    authorized = and_(
+        RemoteAgentReference.identity_verified.is_(True),
+        RemoteAgentReference.location_expires_at.is_not(None),
+        RemoteAgentReference.location_expires_at > now,
+    )
     if verified_only:
-        query = query.where(RemoteAgentReference.identity_verified.is_(True))
+        query = query.where(authorized)
 
     references = db.scalars(
         query.order_by(
-            RemoteAgentReference.identity_verified.desc(),
+            authorized.desc(),
             RemoteAgentReference.name,
             RemoteAgentReference.id,
         )
     ).all()
-    profiles = [_profile(item) for item in references]
+    profiles = [_profile(item, now) for item in references]
     if skill is not None:
         profiles = [item for item in profiles if _skill_matches(item.skills, skill)]
     return FederatedDiscoveryResults(query=q, skill=skill, agents=profiles[:limit])
