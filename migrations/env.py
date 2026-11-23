@@ -4,6 +4,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from agent_commons import (  # noqa: F401
+    a2a_task_models,
     freshness_models,
     migration_models,
     models,

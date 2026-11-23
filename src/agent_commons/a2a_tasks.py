@@ -1,0 +1,273 @@
+"""Opt-in A2A 0.3 JSON-RPC subset for the Text Statistics skill."""
+
+import asyncio
+import hashlib
+import json
+import re
+import secrets
+from datetime import UTC, datetime, timedelta
+from threading import BoundedSemaphore
+from typing import Annotated, Literal
+from uuid import UUID, uuid4
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from sqlalchemy import delete, func, select, text
+from sqlalchemy.exc import DBAPIError
+from starlette.requests import ClientDisconnect
+
+from agent_commons.a2a_task_models import A2ATask
+from agent_commons.config import A2ATaskPeer, settings
+from agent_commons.db import SessionLocal
+from agent_commons.models import Agent
+
+router = APIRouter(tags=["a2a-tasks"])
+MAX_REQUEST_BYTES = 16_384
+MAX_TEXT_BYTES = 4_096
+MAX_RETAINED_TASKS = 1_024
+TASK_RETENTION = timedelta(hours=24)
+BODY_TIMEOUT_SECONDS = 3
+REQUEST_SLOTS = BoundedSemaphore(8)
+TOKEN_PATTERN = re.compile(r"a2a_[A-Za-z0-9_-]{43}")
+
+
+class RPCError(Exception):
+    def __init__(self, code: int, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class RPCRequest(StrictModel):
+    jsonrpc: Literal["2.0"]
+    id: Annotated[str, Field(max_length=128)] | int
+    method: str = Field(min_length=1, max_length=128)
+    params: object = None
+
+
+class TextPart(StrictModel):
+    kind: Literal["text"]
+    text: str = Field(max_length=MAX_TEXT_BYTES)
+
+
+class Message(StrictModel):
+    kind: Literal["message"]
+    role: Literal["user"]
+    messageId: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    parts: list[TextPart] = Field(min_length=1, max_length=1)
+
+
+class SendConfiguration(StrictModel):
+    acceptedOutputModes: list[str] | None = None
+    blocking: bool | None = None
+    historyLength: int | None = Field(default=None, ge=0)
+
+
+class SendParams(StrictModel):
+    message: Message
+    configuration: SendConfiguration | None = None
+
+
+class GetParams(StrictModel):
+    id: str = Field(min_length=1, max_length=36)
+    historyLength: int | None = Field(default=None, ge=0)
+
+
+def _authenticate(request: Request) -> A2ATaskPeer:
+    values = request.headers.getlist("authorization")
+    if len(values) == 1:
+        scheme, _, token = values[0].partition(" ")
+        if scheme.lower() == "bearer" and TOKEN_PATTERN.fullmatch(token):
+            token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
+            for peer in settings.a2a_task_peers:
+                if secrets.compare_digest(peer.token_sha256, token_hash):
+                    if peer.expires_at > datetime.now(UTC):
+                        return peer
+                    break
+    raise HTTPException(401, "Invalid A2A peer credential", headers={"WWW-Authenticate": "Bearer"})
+
+
+def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate JSON field")
+        result[key] = value
+    return result
+
+
+def _reject_constant(value: str) -> None:
+    raise ValueError("Invalid JSON number")
+
+
+async def _read_json(request: Request) -> object:
+    media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if media_type != "application/json":
+        raise HTTPException(415, "Expected application/json")
+    if request.headers.get("content-encoding", "identity") != "identity":
+        raise HTTPException(415, "Encoded request bodies are unsupported")
+    length = request.headers.get("content-length")
+    if length is not None:
+        if not length.isascii() or not length.isdecimal():
+            raise HTTPException(400, "Invalid Content-Length")
+        if len(length) > 16 or int(length) > MAX_REQUEST_BYTES:
+            raise HTTPException(413, "A2A request body is too large")
+    body = bytearray()
+    try:
+        async with asyncio.timeout(BODY_TIMEOUT_SECONDS):
+            async for chunk in request.stream():
+                if len(body) + len(chunk) > MAX_REQUEST_BYTES:
+                    raise HTTPException(413, "A2A request body is too large")
+                body.extend(chunk)
+    except TimeoutError as exc:
+        raise HTTPException(408, "A2A request body timed out") from exc
+    except ClientDisconnect as exc:
+        raise HTTPException(400, "Incomplete A2A request body") from exc
+
+    try:
+        return json.loads(
+            body.decode("utf-8"), object_pairs_hook=_unique_object, parse_constant=_reject_constant
+        )
+    except (ValueError, RecursionError) as exc:
+        raise RPCError(-32700, "Parse error") from exc
+
+
+def _completed_task(task_id: UUID, content: str, byte_count: int) -> dict:
+    return {
+        "kind": "task",
+        "id": str(task_id),
+        "contextId": str(uuid4()),
+        "status": {"state": "completed"},
+        "artifacts": [
+            {
+                "artifactId": str(uuid4()),
+                "name": "text-statistics",
+                "parts": [
+                    {"kind": "text", "text": f"bytes: {byte_count}\nwords: {len(content.split())}"}
+                ],
+            }
+        ],
+    }
+
+
+def _send_task(peer: A2ATaskPeer, params: SendParams) -> dict:
+    output_modes = params.configuration.acceptedOutputModes if params.configuration else None
+    if output_modes is not None and "text/plain" not in output_modes:
+        raise RPCError(-32005, "The skill requires text/plain output")
+    content = params.message.parts[0].text
+    try:
+        encoded = content.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise RPCError(-32602, "Invalid UTF-8 text") from exc
+    if len(encoded) > MAX_TEXT_BYTES:
+        raise RPCError(-32602, "Task text exceeds the UTF-8 byte limit")
+    digest = hashlib.sha256(encoded).hexdigest()
+
+    with SessionLocal.begin() as db:
+        db.execute(text("SET LOCAL statement_timeout = '2s'"))
+        db.execute(text("SET LOCAL lock_timeout = '1s'"))
+        # Serialize submissions so pruning, idempotency, and the global row cap
+        # are decided atomically across all workers. Reads can proceed concurrently.
+        db.execute(text("LOCK TABLE a2a_tasks IN SHARE ROW EXCLUSIVE MODE"))
+        now = datetime.now(UTC)
+        if peer.expires_at <= now or db.get(Agent, peer.recipient_agent_id) is None:
+            raise HTTPException(403, "A2A recipient or credential is unavailable")
+        db.execute(delete(A2ATask).where(A2ATask.expires_at <= now))
+        existing = db.scalar(
+            select(A2ATask).where(
+                A2ATask.caller_root == peer.caller_root,
+                A2ATask.recipient_agent_id == peer.recipient_agent_id,
+                A2ATask.message_id == params.message.messageId,
+            )
+        )
+        if existing:
+            if existing.request_digest != digest:
+                raise RPCError(-32010, "messageId was used for different task content")
+            return existing.result
+        if db.scalar(select(func.count()).select_from(A2ATask)) >= MAX_RETAINED_TASKS:
+            raise RPCError(-32011, "A2A task storage is at capacity")
+        task_id = uuid4()
+        result = _completed_task(task_id, content, len(encoded))
+        db.add(
+            A2ATask(
+                id=task_id,
+                caller_root=peer.caller_root,
+                recipient_agent_id=peer.recipient_agent_id,
+                message_id=params.message.messageId,
+                request_digest=digest,
+                result=result,
+                expires_at=now + TASK_RETENTION,
+            )
+        )
+        return result
+
+
+def _get_task(peer: A2ATaskPeer, params: GetParams) -> dict:
+    try:
+        task_id = UUID(params.id)
+    except ValueError as exc:
+        raise RPCError(-32602, "Invalid task ID") from exc
+    with SessionLocal.begin() as db:
+        db.execute(text("SET LOCAL statement_timeout = '2s'"))
+        now = datetime.now(UTC)
+        if peer.expires_at <= now:
+            raise HTTPException(403, "A2A credential is unavailable")
+        result = db.scalar(
+            select(A2ATask.result).where(
+                A2ATask.id == task_id,
+                A2ATask.caller_root == peer.caller_root,
+                A2ATask.recipient_agent_id == peer.recipient_agent_id,
+                A2ATask.expires_at > now,
+            )
+        )
+        if result is None:
+            raise RPCError(-32001, "Task not found")
+        return result
+
+
+def _dispatch(peer: A2ATaskPeer, rpc: RPCRequest) -> dict:
+    if rpc.method not in ("message/send", "tasks/get"):
+        raise RPCError(-32601, "Method not found")
+    if rpc.method not in peer.scopes:
+        raise HTTPException(403, "Credential is not authorized for this A2A method")
+    try:
+        if rpc.method == "message/send":
+            return _send_task(peer, SendParams.model_validate(rpc.params))
+        return _get_task(peer, GetParams.model_validate(rpc.params))
+    except ValidationError as exc:
+        raise RPCError(-32602, "Invalid params") from exc
+    except DBAPIError as exc:
+        if getattr(exc.orig, "sqlstate", None) in ("55P03", "57014"):
+            raise HTTPException(503, "A2A task storage is busy") from exc
+        raise
+
+
+@router.post("/a2a")
+async def run_a2a_task(request: Request) -> dict:
+    peer = _authenticate(request)
+    if not REQUEST_SLOTS.acquire(blocking=False):
+        raise HTTPException(503, "A2A runtime is busy")
+    request_id = None
+    try:
+        raw = await _read_json(request)
+        try:
+            rpc = RPCRequest.model_validate(raw)
+            if isinstance(rpc.id, str):
+                rpc.id.encode("utf-8")
+        except (ValidationError, UnicodeEncodeError) as exc:
+            raise RPCError(-32600, "Invalid request") from exc
+        request_id = rpc.id
+        result = await run_in_threadpool(_dispatch, peer, rpc)
+        return {"jsonrpc": "2.0", "id": request_id, "result": result}
+    except RPCError as exc:
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {"code": exc.code, "message": str(exc)},
+        }
+    finally:
+        REQUEST_SLOTS.release()
