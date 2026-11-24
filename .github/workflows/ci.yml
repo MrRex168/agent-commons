@@ -77,6 +77,11 @@ jobs:
           AGENT_COMMONS_DEMO_EVIDENCE_PATH: agent-internet-live-evidence.json
         run: pytest -q tests/test_agent_internet_live.py
 
+      - name: Render the evidence dashboard
+        env:
+          AGENT_COMMONS_DASHBOARD_EVIDENCE_PATH: agent-internet-live-evidence.json
+        run: pytest -q tests/test_agent_internet_dashboard.py -k real_milestone
+
       - name: Upload sanitized Agent Internet Live evidence
         uses: actions/upload-artifact@v4
         with:
