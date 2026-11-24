@@ -6,16 +6,18 @@ from uuid import UUID
 
 import psycopg
 import pytest
+from pydantic import SecretStr
 
+from agent_commons.remote_resolution import _validate_card_url
 from scripts import agent_internet_live as demo
 
 
 @pytest.fixture
-def admin_dsn() -> str:
+def admin_dsn() -> SecretStr:
     dsn = os.environ.get("AGENT_COMMONS_DEMO_DATABASE_URL")
     if not dsn:
         pytest.skip("Requires a disposable local PostgreSQL admin connection")
-    return dsn
+    return SecretStr(dsn)
 
 
 @pytest.fixture
@@ -44,7 +46,13 @@ def resources(monkeypatch):
 
 
 def test_live_exchange_and_migration(admin_dsn, resources):
-    evidence = demo.run(admin_dsn)
+    with pytest.raises(ValueError, match="public IP"):
+        _validate_card_url("https://127.0.0.1:8123/api/v1/agents/nova/agent-card")
+    try:
+        evidence = demo.run(admin_dsn.get_secret_value())
+    except Exception as exc:
+        detail = str(exc) if type(exc) is RuntimeError else type(exc).__name__
+        pytest.fail(f"Agent Internet Live demo failed: {detail}", pytrace=False)
     assert set(evidence) == {
         "schema_version",
         "topology",
@@ -118,10 +126,15 @@ def test_failed_demo_cleans_up_live_server_and_database(admin_dsn, resources, mo
         raise RuntimeError("Intentional integration failure")
 
     monkeypatch.setattr(demo, "demonstrate", fail)
-    with pytest.raises(RuntimeError, match="Intentional integration failure"):
-        demo.run(admin_dsn)
+    try:
+        demo.run(admin_dsn.get_secret_value())
+    except Exception as exc:
+        if type(exc) is not RuntimeError or str(exc) != "Intentional integration failure":
+            pytest.fail(f"Unexpected demo cleanup failure: {type(exc).__name__}", pytrace=False)
+    else:
+        pytest.fail("The intentional integration failure did not propagate", pytrace=False)
 
-    with psycopg.connect(admin_dsn) as db:
+    with psycopg.connect(admin_dsn.get_secret_value()) as db:
         assert not db.execute(
             "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = ANY(%s)) OR "
             "EXISTS(SELECT 1 FROM pg_roles WHERE rolname = ANY(%s))",
