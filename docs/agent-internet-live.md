@@ -1,8 +1,12 @@
 # Agent Internet Live
 
-This integration demo runs three independent Agent Commons processes so Atlas
-can stay on its original instance and make real cross-server calls to Nova
-before and after Nova moves. Each process uses a separate, temporary PostgreSQL
+Agent Internet Live is the v0.5.0 integration demo. It uses the deterministic
+Text Statistics skill and pre-enrolled peers. Its dashboard displays a recorded
+snapshot from a completed run.
+
+The demo runs three independent Agent Commons processes. Atlas stays on its
+original instance and makes real cross-server calls to Nova before and after
+Nova moves. Each process uses a separate, temporary PostgreSQL
 database, a database-specific role, and separate local agent credentials.
 The servers listen only on ephemeral loopback HTTPS ports.
 
@@ -21,9 +25,10 @@ python -m scripts.agent_internet_live --evidence /tmp/agent-internet-live.json
 
 The script prints the same sanitized JSON to standard output. For the automated
 integration checks, also configure the [disposable pytest database](../README.md#quality-checks)
-and run `pytest -q tests/test_agent_internet_live.py`. CI runs those checks and
-uploads the evidence JSON. A successful run removes its databases, roles,
-server processes, and temporary TLS material before returning evidence.
+and run `pytest -q tests/test_agent_internet_live.py`. CI runs those checks,
+validates dashboard rendering, and uploads the evidence JSON. A successful run
+removes its databases, roles, server processes, and temporary TLS material before
+returning evidence.
 An abrupt process or host kill can prevent cleanup; use a disposable database
 server for this run.
 
@@ -39,7 +44,7 @@ server for this run.
    Its destination issues a new local credential. Nova publishes a higher
    signed location sequence, and Atlas resolves that Card to the same remote
    reference, sovereign root, and follow. Atlas rejects the stale source Card.
-4. The demo retires Nova's old task listener, provisions a new peer credential
+4. The demo disables Nova's old task route, provisions a new peer credential
    at the destination, and sends a fresh task from the original Atlas server.
 
 The JSON contains public fingerprints, reference and follow IDs, task IDs and
@@ -74,7 +79,8 @@ python -m scripts.agent_internet_dashboard --evidence /tmp/agent-internet-live.j
 ```
 
 Open `http://127.0.0.1:8080/`. The dashboard can also open a previously downloaded
-CI evidence artifact. It needs only the JSON file and the installed project.
+CI evidence artifact. It runs from the checkout with the installed project and JSON file. It requires no
+database or peer credentials.
 It reads the same configured path on each page load. Files must be regular,
 non-symlink files no larger than 16 KiB, with the exact Milestone 2 schema.
 A missing or invalid file produces an error page without rendering any

@@ -2,6 +2,14 @@
 
 All notable changes to Agent Commons are documented here.
 
+## [0.5.0]
+
+- Add opt-in A2A 0.3 JSON-RPC Text Statistics tasks with scoped peer credentials, PostgreSQL task storage, and atomic retries. ([#50](https://github.com/MrRex168/agent-commons/pull/50))
+- Demonstrate authenticated task exchange and sovereign identity continuity before and after a three-server migration. ([#51](https://github.com/MrRex168/agent-commons/pull/51))
+- Add a standalone, read-only dashboard for validated demo evidence. ([#52](https://github.com/MrRex168/agent-commons/pull/52))
+
+See the [v0.5.0 release notes](docs/releases/v0.5.0.md) for setup and compatibility details.
+
 ## [0.4.1]
 
 - Require current-controller authorization for sovereign A2A locations. Preserve legacy reference IDs and follows while withholding pending and expired sovereign endpoints. ([#45](https://github.com/MrRex168/agent-commons/pull/45))
