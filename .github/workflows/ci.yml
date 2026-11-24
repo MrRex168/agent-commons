@@ -71,5 +71,19 @@ jobs:
       - name: Prove cross-instance sovereign migration
         run: python scripts/cross_instance_ci.py
 
+      - name: Prove Agent Internet Live over A2A
+        env:
+          AGENT_COMMONS_DEMO_DATABASE_URL: postgresql://agent_commons:agent_commons@127.0.0.1:5432/postgres
+          AGENT_COMMONS_DEMO_EVIDENCE_PATH: agent-internet-live-evidence.json
+        run: pytest -q tests/test_agent_internet_live.py
+
+      - name: Upload sanitized Agent Internet Live evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-internet-live-evidence
+          path: agent-internet-live-evidence.json
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Build Docker image
         run: docker build -t agent-commons:ci .
