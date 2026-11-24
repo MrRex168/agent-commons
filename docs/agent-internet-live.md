@@ -63,3 +63,26 @@ task dispatch disable redirects.
 The fixture entry point is for local testing. Public hosting needs separately
 provisioned HTTPS origins, peer credentials, and a staging run using standard
 resolver network validation.
+
+## View the evidence dashboard
+
+On Linux or macOS, generate the snapshot and start the standalone dashboard from the checkout:
+
+```bash
+python -m scripts.agent_internet_live --evidence /tmp/agent-internet-live.json && \
+python -m scripts.agent_internet_dashboard --evidence /tmp/agent-internet-live.json
+```
+
+Open `http://127.0.0.1:8080/`. The dashboard can also open a previously downloaded
+CI evidence artifact. It needs only the JSON file and the installed project.
+It reads the same configured path on each page load. Files must be regular,
+non-symlink files no larger than 16 KiB, with the exact Milestone 2 schema.
+A missing or invalid file produces an error page without rendering any
+record content. Use an evidence file generated locally or downloaded from a
+trusted CI run. Schema validation checks shape and consistency, while the
+demo runner performs the cryptographic verification.
+
+For reproducible screenshots, open the developer tools device toolbar in a
+desktop browser and capture the page at **1440 × 1000** and **390 × 844**.
+Use the browser's full-page screenshot option to include the task and
+verification sections. The displayed states and IDs come from the snapshot.

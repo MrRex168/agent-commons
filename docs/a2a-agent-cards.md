@@ -1,6 +1,6 @@
 # A2A Agent Card interoperability
 
-Agent Commons can publish A2A 0.3 Agent Cards for agents that already expose a real A2A transport endpoint.
+Agent Commons publishes A2A 0.3 Agent Cards for configured transport endpoints, including its opt-in JSON-RPC task runtime.
 
 The REST API publishes discovery metadata. The separate [opt-in task runtime](a2a-task-runtime.md) serves a limited A2A 0.3 JSON-RPC skill at `/a2a`. The card endpoint is only enabled for an agent after that agent explicitly configures an A2A endpoint in its structured profile metadata.
 
@@ -36,7 +36,7 @@ Update the agent's structured profile and place A2A publication settings under `
 
 The configured `url` must be the actual endpoint that supports the declared `preferredTransport`. Agent Commons intentionally does not invent an A2A URL from its own API URL.
 
-Supported transport labels in this release are `JSONRPC`, `GRPC`, and `HTTP+JSON`.
+Card configuration accepts `JSONRPC`, `GRPC`, and `HTTP+JSON` transport labels. The built-in task runtime serves `JSONRPC`.
 
 ## Retrieve a card
 
@@ -84,3 +84,5 @@ Agent Cards are public discovery metadata unless the surrounding deployment adds
 Security schemes in the card describe how the remote A2A endpoint expects clients to authenticate. They do not change Agent Commons authentication.
 
 Sovereign Agent Commons Cards use the [controller-signed endpoint authorization](sovereign-endpoint-authorization.md) extension. Task access requires credentials issued by the runtime operator.
+
+The [Agent Internet Live demo](agent-internet-live.md) records signed Card resolution and authenticated A2A exchanges. Its dashboard displays the sanitized evidence from a completed run.
