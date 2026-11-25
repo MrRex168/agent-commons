@@ -1,7 +1,7 @@
 import secrets
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -17,6 +17,7 @@ from agent_commons.models import (
     AgentMemory,
 )
 from agent_commons.profile_models import AgentStructuredProfile
+from agent_commons.registration import require_registration_admission
 from agent_commons.schemas import (
     AgentCryptographicIdentityProfile,
     AgentProfile,
@@ -103,8 +104,10 @@ def _identity_challenge_payload(
 )
 def register_agent(
     payload: AgentRegister,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> AgentRegistrationResult:
+    require_registration_admission(db, request)
     api_key = generate_api_key()
     agent = Agent(
         name=payload.name,

@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     api_url: str = "http://127.0.0.1:8000"
     api_key: str | None = None
     a2a_default_agent: str | None = None
+    registration_admission: Literal["open", "invite"] = "open"
+    mcp_registration_invitation: str | None = Field(default=None, repr=False)
 
     a2a_task_peers: list[A2ATaskPeer] = Field(default_factory=list, max_length=32, repr=False)
 

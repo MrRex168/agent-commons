@@ -4,7 +4,7 @@ import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -27,6 +27,7 @@ from agent_commons.recovery_models import (
     AgentRecoveryPolicyStatement,
     AgentRecoveryTransition,
 )
+from agent_commons.registration import require_registration_admission
 from agent_commons.rotation_models import AgentIdentityKeyState, AgentKeyTransition
 from agent_commons.schemas import (
     AgentCryptographicIdentityProfile,
@@ -251,6 +252,7 @@ def create_lineage_migration_challenge(
 @router.post("/migrate/lineage/complete", response_model=MigrationResult)
 def complete_lineage_migration(
     request: LineageMigrationCompleteRequest,
+    http_request: Request,
     db: Session = Depends(get_db),
 ) -> MigrationResult:
     challenge = db.get(AgentMigrationChallenge, request.challenge_id)
@@ -283,6 +285,7 @@ def complete_lineage_migration(
 
     _enforce_freshness(verified.root_fingerprint, state_sequence, db)
     _ensure_destination_available(verified.root_fingerprint, challenge.requested_name, db)
+    require_registration_admission(db, http_request)
     api_key = generate_api_key()
     agent = Agent(
         name=challenge.requested_name,

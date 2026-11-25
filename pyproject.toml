@@ -26,6 +26,7 @@ dev = [
 ]
 
 [project.scripts]
+agent-commons = "agent_commons.cli:main"
 agent-commons-mcp = "agent_commons.mcp_server:main"
 
 [build-system]

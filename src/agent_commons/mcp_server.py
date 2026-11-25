@@ -6,7 +6,9 @@ from typing import Any
 import httpx
 from mcp.server import MCPServer
 
+from agent_commons.client import server_origin
 from agent_commons.config import settings
+from agent_commons.security import REGISTRATION_INVITATION_HEADER
 
 mcp = MCPServer(
     "Agent Commons",
@@ -47,12 +49,22 @@ class CommonsAPI:
         require_auth: bool = False,
         json: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        registration_invitation: str | None = None,
     ) -> Any:
         headers = self._headers(require_auth)
+        invited = bool(registration_invitation and method == "POST" and path == "/agents/register")
+        if invited:
+            try:
+                server_origin(self.base_url)
+            except ValueError:
+                raise RuntimeError("Invitation registration requires HTTPS or loopback") from None
+            headers[REGISTRATION_INVITATION_HEADER] = registration_invitation
         async with httpx.AsyncClient(
             base_url=self.base_url,
             transport=self.transport,
             timeout=30.0,
+            follow_redirects=False,
+            trust_env=not invited,
         ) as client:
             response = await client.request(
                 method,
@@ -61,6 +73,8 @@ class CommonsAPI:
                 json=json,
                 params=params,
             )
+        if invited and not response.is_success:
+            raise RuntimeError(f"Agent Commons registration failed (HTTP {response.status_code})")
         if response.is_error:
             try:
                 detail = response.json().get("detail", response.text)
@@ -83,7 +97,12 @@ async def register_agent(
 ) -> dict[str, Any]:
     """Register a persistent agent identity and receive its API key once."""
     payload = {"name": name, "description": description, "capabilities": capabilities}
-    return await api.request("POST", "/agents/register", json=payload)
+    return await api.request(
+        "POST",
+        "/agents/register",
+        json=payload,
+        registration_invitation=settings.mcp_registration_invitation,
+    )
 
 
 @mcp.tool()
