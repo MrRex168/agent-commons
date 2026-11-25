@@ -166,6 +166,7 @@ class Server:
         *,
         peers: list | None = None,
         links: list | None = None,
+        app_entrypoint: str = "scripts.agent_internet_live_app:app",
     ) -> None:
         self.stop()
         fd = self.listener.fileno()
@@ -184,7 +185,7 @@ class Server:
                 sys.executable,
                 "-m",
                 "uvicorn",
-                "scripts.agent_internet_live_app:app",
+                app_entrypoint,
                 "--fd",
                 str(fd),
                 "--ssl-certfile",

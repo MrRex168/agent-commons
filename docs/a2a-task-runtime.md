@@ -102,3 +102,6 @@ restricted peer allowlist for a hosted demo. The admission limit is per worker;
 shared rate limits and network-level deadlines belong at ingress.
 A bearer credential grants only its configured method scopes. A follow,
 verified lineage, or signed location grants no task access.
+
+See the [upstream SDK compatibility spike](open-agent-network/a2a-compatibility.md)
+for the tested client version and wire protocol boundaries.
