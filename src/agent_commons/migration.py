@@ -3,7 +3,7 @@ import json
 import secrets
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -15,6 +15,7 @@ from agent_commons.identity_crypto import identity_fingerprint, verify_identity_
 from agent_commons.migration_models import AgentMigrationChallenge
 from agent_commons.models import Agent, AgentCryptographicIdentity, AgentMemory
 from agent_commons.profile_models import AgentStructuredProfile
+from agent_commons.registration import require_registration_admission
 from agent_commons.schemas import (
     AgentCryptographicIdentityProfile,
     AgentProfile,
@@ -215,6 +216,7 @@ def create_migration_challenge(
 @router.post("/migrate/complete", response_model=MigrationResult)
 def complete_migration(
     request: MigrationCompleteRequest,
+    http_request: Request,
     db: Session = Depends(get_db),
 ) -> MigrationResult:
     challenge = db.get(AgentMigrationChallenge, request.challenge_id)
@@ -273,6 +275,7 @@ def complete_migration(
     _enforce_freshness(challenge.fingerprint, state_sequence, db)
     _ensure_destination_available(challenge.fingerprint, challenge.requested_name, db)
 
+    require_registration_admission(db, http_request)
     api_key = generate_api_key()
     agent = Agent(
         name=challenge.requested_name,

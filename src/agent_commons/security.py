@@ -1,6 +1,8 @@
 import hashlib
 import secrets
 
+REGISTRATION_INVITATION_HEADER = "X-Agent-Commons-Invitation"
+
 
 def generate_api_key() -> str:
     return f"ac_{secrets.token_urlsafe(32)}"

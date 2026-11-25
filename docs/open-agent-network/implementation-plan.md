@@ -4,7 +4,7 @@ Target: operator-enrolled external developer preview. Keep REST `/api/v1`,
 MCP, sovereign formats, and A2A 0.3 compatibility stable. The compatibility
 spike establishes a working upstream-client pairing. The security controls
 below remain future work.
-[Compatibility results](a2a-compatibility.md) · [Security and deployment](security-architecture.md)
+[Compatibility results](a2a-compatibility.md) · [Onboarding guide](onboarding.md) · [Security and deployment](security-architecture.md)
 
 | Milestone | Deliverables and dependencies | Required regression coverage |
 | --- | --- | --- |

@@ -98,5 +98,14 @@ jobs:
           pip install -r tests/requirements-a2a-spike.txt
           pytest -q tests/test_a2a_sdk_spike.py
 
+      - name: Smoke-test the installed onboarding CLI
+        run: |
+          pip wheel --no-deps . --wheel-dir "$RUNNER_TEMP/onboarding-dist"
+          python -m venv "$RUNNER_TEMP/onboarding-wheel"
+          "$RUNNER_TEMP/onboarding-wheel/bin/pip" install "$RUNNER_TEMP"/onboarding-dist/*.whl
+          AGENT_COMMONS_REGISTRATION_ADMISSION=invalid "$RUNNER_TEMP/onboarding-wheel/bin/agent-commons" \
+            --config "$RUNNER_TEMP/onboarding-agent" init --url https://atlas.example --name atlas
+          test "$(stat -c '%a' "$RUNNER_TEMP/onboarding-agent/controller.key")" = 600
+
       - name: Build Docker image
         run: docker build -t agent-commons:ci .

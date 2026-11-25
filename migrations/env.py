@@ -9,6 +9,7 @@ from agent_commons import (  # noqa: F401
     migration_models,
     models,
     recovery_models,
+    registration,
     remote_models,
     rotation_models,
 )
