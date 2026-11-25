@@ -90,5 +90,13 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Test the upstream A2A SDK compatibility spike
+        env:
+          AGENT_COMMONS_A2A_SDK_SPIKE: "1"
+          AGENT_COMMONS_DEMO_DATABASE_URL: postgresql://agent_commons:agent_commons@127.0.0.1:5432/postgres
+        run: |
+          pip install -r tests/requirements-a2a-spike.txt
+          pytest -q tests/test_a2a_sdk_spike.py
+
       - name: Build Docker image
         run: docker build -t agent-commons:ci .
