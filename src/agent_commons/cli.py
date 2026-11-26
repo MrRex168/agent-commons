@@ -13,13 +13,14 @@ import warnings
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agent_commons.client import CommonsClient, CommonsError, public_multikey, server_origin
 from agent_commons.identity_crypto import identity_fingerprint
+from agent_commons.outbound_a2a import BoundGrant, DestinationApproval
 
 FILE_FLAGS = os.O_NOFOLLOW | os.O_NONBLOCK
 NAME_PATTERN = r"^[a-zA-Z0-9_-]{3,80}$"
@@ -192,18 +193,43 @@ def _operator_peer(args) -> None:
         print(f"Enrollment approval: {approval_id}")
 
 
-def _enroll_peer(args, directory: int, key: Ed25519PrivateKey) -> None:
-    with CommonsClient(args.url) as client:
-        grant = client.enroll_peer(
-            key,
-            approval_id=args.approval,
-            caller_root=args.caller_root,
+def _enroll_peer(args, directory: int, key: Ed25519PrivateKey, account: LocalAccount) -> None:
+    bound_options = (args.reference, args.peer_root, args.peer_controller, args.endpoint)
+    if any(bound_options):
+        if not all(bound_options):
+            raise CommonsError("Provide the reference, peer root, controller and endpoint together")
+        destination = DestinationApproval(
+            reference_id=args.reference,
+            peer_root=args.peer_root,
+            controller=args.peer_controller,
             recipient_agent_id=args.recipient,
-            scopes=args.scope,
+            endpoint=args.endpoint,
         )
+        if args.url != destination.audience:
+            raise CommonsError("Enrollment URL must match the approved task origin")
+        with CommonsClient(account.origin, api_key=account.api_key) as client:
+            bound = client.enroll_dispatch_peer(
+                key,
+                destination=destination,
+                approval_id=args.approval,
+                caller_root=args.caller_root,
+                scopes=args.scope,
+            )
+        grant = bound.grant
+        raw = bound.model_dump(mode="json")
+        raw["grant"]["token"] = grant.token.get_secret_value()
+    else:
+        with CommonsClient(args.url) as client:
+            grant = client.enroll_peer(
+                key,
+                approval_id=args.approval,
+                caller_root=args.caller_root,
+                recipient_agent_id=args.recipient,
+                scopes=args.scope,
+            )
+        raw = grant.model_dump(mode="json")
+        raw["token"] = grant.token.get_secret_value()
     name = f"peer-{grant.grant_id}.json"
-    raw = grant.model_dump(mode="json")
-    raw["token"] = grant.token.get_secret_value()
     try:
         _write(directory, name, json.dumps(raw).encode("utf-8"), replace=False)
     except OSError:
@@ -211,6 +237,27 @@ def _enroll_peer(args, directory: int, key: Ed25519PrivateKey) -> None:
             f"Could not save issued grant {grant.grant_id}. Ask the operator to revoke it"
         ) from None
     print(f"Peer grant saved privately: {grant.grant_id}")
+
+
+def _task_command(args, directory: int, client: CommonsClient) -> None:
+    raw = _read(f"peer-{args.grant}.json", directory=directory)
+    try:
+        grant = BoundGrant.model_validate_json(raw)
+        if grant.grant.grant_id != args.grant:
+            raise ValueError
+    except ValueError:
+        raise CommonsError(
+            "The credential file has no matching verified destination binding"
+        ) from None
+    if args.command == "task-send":
+        try:
+            text = sys.stdin.buffer.read(4097).decode("utf-8")
+        except UnicodeDecodeError:
+            raise CommonsError("Task input must be UTF-8 text") from None
+        result = client.send_task(grant, text, message_id=args.message_id or uuid4().hex)
+    else:
+        result = client.get_task(grant, args.task_id)
+    print(result.model_dump_json())
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -245,6 +292,10 @@ def _parser() -> argparse.ArgumentParser:
     enroll = commands.add_parser("peer-enroll", help="Redeem a peer approval with a local key")
     enroll.add_argument("--url", required=True)
     enroll.add_argument("--approval", required=True, type=UUID)
+    enroll.add_argument("--reference", type=UUID)
+    enroll.add_argument("--peer-root")
+    enroll.add_argument("--peer-controller")
+    enroll.add_argument("--endpoint")
     for command in (approve, enroll):
         command.add_argument("--caller-root", required=True)
         command.add_argument("--recipient", required=True, type=UUID)
@@ -254,6 +305,12 @@ def _parser() -> argparse.ArgumentParser:
     for name in ("peer-rotate", "peer-revoke"):
         command = commands.add_parser(name)
         command.add_argument("--grant", required=True, type=UUID)
+    send = commands.add_parser("task-send", help="Send a Text Statistics task from stdin")
+    send.add_argument("--grant", required=True, type=UUID)
+    send.add_argument("--message-id")
+    get = commands.add_parser("task-get", help="Retrieve a task by ID")
+    get.add_argument("--grant", required=True, type=UUID)
+    get.add_argument("task_id", type=UUID)
     return parser
 
 
@@ -271,9 +328,13 @@ def run(args) -> None:
 
     with _directory(args.config) as directory:
         account = LocalAccount.model_validate_json(_read("account.json", directory=directory))
+        if args.command in ("task-send", "task-get"):
+            with CommonsClient(account.origin, api_key=account.api_key) as client:
+                _task_command(args, directory, client)
+            return
         key = Ed25519PrivateKey.from_private_bytes(_read("controller.key", directory=directory))
         if args.command == "peer-enroll":
-            _enroll_peer(args, directory, key)
+            _enroll_peer(args, directory, key, account)
             return
         with CommonsClient(account.origin, api_key=account.api_key) as client:
             match args.command:

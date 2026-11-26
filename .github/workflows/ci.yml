@@ -75,7 +75,7 @@ jobs:
         env:
           AGENT_COMMONS_DEMO_DATABASE_URL: postgresql://agent_commons:agent_commons@127.0.0.1:5432/postgres
           AGENT_COMMONS_DEMO_EVIDENCE_PATH: agent-internet-live-evidence.json
-        run: pytest -q tests/test_agent_internet_live.py
+        run: pytest -q tests/test_agent_internet_live.py tests/test_outbound_a2a.py
 
       - name: Render the evidence dashboard
         env:

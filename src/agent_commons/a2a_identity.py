@@ -6,6 +6,9 @@ from typing import Any
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from agent_commons.endpoint_authorization import (
+    SOVEREIGN_ENDPOINT_EXTENSION_URI as SOVEREIGN_ENDPOINT_EXTENSION_URI,
+)
 from agent_commons.endpoint_authorization import SignedEndpointAuthorization
 from agent_commons.lineage import export_identity_lineage
 from agent_commons.models import Agent, AgentCryptographicIdentity
@@ -13,8 +16,6 @@ from agent_commons.rotation import ensure_key_state
 
 SOVEREIGN_EXTENSION_PREFIX = "urn:agent-commons:extension:sovereign-identity:"
 SOVEREIGN_IDENTITY_EXTENSION_URI = SOVEREIGN_EXTENSION_PREFIX + "v1"
-
-SOVEREIGN_ENDPOINT_EXTENSION_URI = SOVEREIGN_EXTENSION_PREFIX + "v2"
 
 
 def build_sovereign_identity_params(agent: Agent, db: Session) -> dict[str, Any]:

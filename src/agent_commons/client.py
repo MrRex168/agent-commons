@@ -1,18 +1,27 @@
 """Small synchronous client for the versioned Agent Commons REST API."""
 
+import json
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import base58
 import httpx
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from pydantic import BaseModel, Field
 
-from agent_commons.endpoint_authorization import EndpointAuthorization, canonical_endpoint_url
+from agent_commons import outbound_https
+from agent_commons.endpoint_authorization import (
+    SOVEREIGN_ENDPOINT_EXTENSION_URI,
+    EndpointAuthorization,
+    SignedEndpointAuthorization,
+    canonical_endpoint_url,
+)
 from agent_commons.identity_crypto import ED25519_MULTICODEC_PREFIX, identity_fingerprint
+from agent_commons.outbound_a2a import BoundGrant, DestinationApproval, TaskStatistics, statistics
 from agent_commons.peer_protocol import (
     EnrollmentChallenge,
     IssuedGrant,
@@ -302,12 +311,34 @@ class CommonsClient:
         recipient_agent_id: UUID,
         scopes: list[Method],
     ) -> IssuedGrant:
-        audience = https_audience(self.origin)
+        def exchange(action: str, path: str, body: dict) -> dict:
+            return self._request(action, "POST", path, authenticated=False, body=body)
+
+        return self._enroll(
+            key,
+            approval_id,
+            caller_root,
+            recipient_agent_id,
+            scopes,
+            https_audience(self.origin),
+            exchange,
+        )
+
+    def _enroll(
+        self,
+        key: Ed25519PrivateKey,
+        approval_id: UUID,
+        caller_root: str,
+        recipient_agent_id: UUID,
+        scopes: list[Method],
+        audience: str,
+        exchange: Callable[[str, str, dict], dict],
+    ) -> IssuedGrant:
         path = f"peers/{UUID(str(approval_id))}"
         fields = (audience, caller_root, recipient_agent_id, sorted(set(scopes)))
         if not scopes or not set(scopes) <= {"message/send", "tasks/get"}:
             raise CommonsError("Specify the expected task method scopes")
-        response = self._request("Peer challenge", "POST", path + "/challenge", authenticated=False)
+        response = exchange("Peer challenge", path + "/challenge", {})
         try:
             challenge = EnrollmentChallenge.model_validate(response)
             now = datetime.now(UTC)
@@ -326,12 +357,10 @@ class CommonsClient:
                 raise ValueError
         except ValueError:
             raise CommonsError("Peer challenge did not match the expected approval") from None
-        response = self._request(
+        response = exchange(
             "Peer redemption",
-            "POST",
             path + "/redeem",
-            authenticated=False,
-            body={
+            {
                 "challenge_id": str(challenge.challenge_id),
                 "signature_multibase": _sign(key, challenge.signing_payload()),
             },
@@ -348,6 +377,144 @@ class CommonsClient:
         except (TypeError, ValueError):
             raise CommonsError("Peer redemption returned an invalid grant") from None
         return grant
+
+    def _verified_destination(self, approved: DestinationApproval) -> EndpointAuthorization:
+        try:
+            result = self._request(
+                "Peer refresh", "POST", f"agents/remote/{approved.reference_id}/refresh"
+            )
+            card = result["card_snapshot"]
+            if (
+                not result["identity_verified"]
+                or not result["lineage_verified"]
+                or result["endpoint_authorization_status"] != "authorized"
+                or UUID(result["id"]) != approved.reference_id
+                or result["root_fingerprint"] != approved.peer_root
+                or result["current_controller_public_key"] != approved.controller
+                or result["a2a_url"] != approved.endpoint
+                or result["preferred_transport"] != approved.transport
+                or card["protocolVersion"] != "0.3.0"
+            ):
+                raise ValueError
+            (params,) = [
+                ext["params"]
+                for ext in card["capabilities"]["extensions"]
+                if ext["uri"] == SOVEREIGN_ENDPOINT_EXTENSION_URI
+            ]
+            signed = SignedEndpointAuthorization.model_validate(params["endpointAuthorization"])
+            signed.verify(
+                root=approved.peer_root,
+                controller=approved.controller,
+                identity_sequence=result["identity_sequence"],
+                card_url=result["card_url"],
+                a2a_url=approved.endpoint,
+                transport=approved.transport,
+                now=datetime.now(UTC),
+            )
+        except (KeyError, TypeError, ValueError, CommonsError):
+            raise CommonsError(
+                "Approved sovereign destination could not be verified. Check the Card, "
+                "controller, and current location"
+            ) from None
+        return signed.authorization
+
+    def enroll_dispatch_peer(
+        self,
+        key: Ed25519PrivateKey,
+        *,
+        destination: DestinationApproval,
+        approval_id: UUID,
+        caller_root: str,
+        scopes: list[Method],
+    ) -> BoundGrant:
+        """Verify a caller-approved reference and redeem a fresh, endpoint-bound credential."""
+        claim = self._verified_destination(destination)
+        audience = destination.audience
+
+        def exchange(action: str, path: str, body: dict) -> dict:
+            return _outbound_json(action, audience + "/api/v1/" + path, body)
+
+        grant = self._enroll(
+            key,
+            approval_id,
+            caller_root,
+            destination.recipient_agent_id,
+            scopes,
+            audience,
+            exchange,
+        )
+        return BoundGrant(
+            destination=destination,
+            home_origin=self.origin,
+            grant=grant,
+            expires_at=grant.expires_at,
+            identity_sequence=claim.identity_sequence,
+            location_sequence=claim.location_sequence,
+        )
+
+    def send_task(self, grant: BoundGrant, text: str, *, message_id: str) -> TaskStatistics:
+        try:
+            valid_text = len(text.encode("utf-8")) <= 4096
+        except UnicodeEncodeError:
+            valid_text = False
+        if not valid_text or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", message_id):
+            raise CommonsError("Send requires up to 4096 UTF-8 bytes and a valid message ID")
+        return self._task(
+            grant,
+            "message/send",
+            {
+                "message": {
+                    "kind": "message",
+                    "role": "user",
+                    "messageId": message_id,
+                    "parts": [{"kind": "text", "text": text}],
+                },
+            },
+        )
+
+    def get_task(self, grant: BoundGrant, task_id: UUID) -> TaskStatistics:
+        task = self._task(grant, "tasks/get", {"id": str(task_id)})
+        if task.id != task_id:
+            raise CommonsError("A2A server returned a different task ID")
+        return task
+
+    def _task(self, grant: BoundGrant, method: Method, params: dict) -> TaskStatistics:
+        if grant.home_origin != self.origin:
+            raise CommonsError("Credential belongs to a different Agent Commons home server")
+        if method not in grant.grant.scopes:
+            raise CommonsError("Peer credential does not permit this A2A method")
+        if grant.expires_at <= datetime.now(UTC):
+            raise CommonsError("Peer credential has expired")
+        claim = self._verified_destination(grant.destination)
+        if (
+            claim.identity_sequence != grant.identity_sequence
+            or claim.location_sequence != grant.location_sequence
+        ):
+            raise CommonsError("Peer location or identity sequence conflicts with enrollment")
+        if grant.expires_at <= datetime.now(UTC):
+            raise CommonsError("Peer credential has expired")
+        request_id = str(uuid4())
+        response = _outbound_json(
+            "A2A task request",
+            grant.destination.endpoint,
+            {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
+            bearer=grant.grant.token.get_secret_value(),
+            valid_until=min(grant.expires_at, claim.expiration()),
+        )
+        if response.get("jsonrpc") != "2.0" or response.get("id") != request_id:
+            raise CommonsError("A2A server returned an invalid response")
+        if "error" in response:
+            error = response["error"]
+            code = error.get("code") if isinstance(error, dict) else None
+            if code == -32001:
+                raise CommonsError("Task not found")
+            if code == -32010:
+                raise CommonsError("Message ID was already used with different text")
+            raise CommonsError("A2A server rejected the task request")
+        try:
+            return statistics(response["result"])
+        except (KeyError, TypeError, ValueError):
+            raise CommonsError("A2A server returned an invalid task result") from None
 
     def resolve_peer(self, card_url: str) -> PeerVerification:
         result = self._request(
@@ -369,3 +536,37 @@ def _peer_verification(response: dict) -> PeerVerification:
         return PeerVerification.model_validate(response)
     except ValueError:
         raise CommonsError("Peer endpoint returned invalid verification fields") from None
+
+
+def _outbound_json(
+    action: str,
+    url: str,
+    body: dict,
+    *,
+    bearer: str | None = None,
+    valid_until: datetime | None = None,
+) -> dict:
+    try:
+        raw = outbound_https.request(
+            url,
+            response_limit=16_384,
+            body=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            bearer=bearer,
+            valid_until=valid_until,
+        )
+        result = json.loads(raw)
+        if not isinstance(result, dict):
+            raise ValueError
+        return result
+    except outbound_https.DestinationError:
+        raise CommonsError(f"{action} refused an unsafe HTTPS destination") from None
+    except outbound_https.UnexpectedStatus as exc:
+        reason = {
+            401: "credential expired, revoked, or unrecognized",
+            403: "scope or recipient denied",
+        }.get(exc.status, f"HTTP {exc.status}")
+        raise CommonsError(f"{action} failed ({reason})", exc.status) from None
+    except outbound_https.TransferError as exc:
+        raise CommonsError(f"{action} failed. {exc}") from None
+    except (ValueError, RecursionError):
+        raise CommonsError(f"{action} returned an invalid response") from None
