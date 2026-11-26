@@ -11,9 +11,10 @@ from uuid import UUID, uuid4
 import base58
 import httpx
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 
 from agent_commons import outbound_https
+from agent_commons.collaboration import SkillScopes
 from agent_commons.endpoint_authorization import (
     SOVEREIGN_ENDPOINT_EXTENSION_URI,
     EndpointAuthorization,
@@ -26,6 +27,8 @@ from agent_commons.peer_protocol import (
     EnrollmentChallenge,
     IssuedGrant,
     Method,
+    SkillEnrollmentChallenge,
+    SkillIssuedGrant,
     https_audience,
 )
 from agent_commons.security import REGISTRATION_INVITATION_HEADER
@@ -333,14 +336,31 @@ class CommonsClient:
         scopes: list[Method],
         audience: str,
         exchange: Callable[[str, str, dict], dict],
+        skills: list[str] | None = None,
     ) -> IssuedGrant:
         path = f"peers/{UUID(str(approval_id))}"
         fields = (audience, caller_root, recipient_agent_id, sorted(set(scopes)))
         if not scopes or not set(scopes) <= {"message/send", "tasks/get"}:
             raise CommonsError("Specify the expected task method scopes")
+        if skills is not None:
+            try:
+                skills = sorted(TypeAdapter(SkillScopes).validate_python(skills))
+                if len(set(skills)) != len(skills):
+                    raise ValueError
+            except ValueError:
+                raise CommonsError("Specify distinct versioned skill scopes") from None
         response = exchange("Peer challenge", path + "/challenge", {})
         try:
-            challenge = EnrollmentChallenge.model_validate(response)
+            challenge = (
+                EnrollmentChallenge.model_validate(response)
+                if skills is None
+                else SkillEnrollmentChallenge.model_validate(response)
+            )
+            if (
+                isinstance(challenge, SkillEnrollmentChallenge)
+                and sorted(challenge.skills) != skills
+            ):
+                raise ValueError
             now = datetime.now(UTC)
             if (
                 challenge.approval_id != approval_id
@@ -366,11 +386,18 @@ class CommonsClient:
             },
         )
         try:
-            grant = IssuedGrant.model_validate(response)
+            grant = (
+                IssuedGrant.model_validate(response)
+                if skills is None
+                else SkillIssuedGrant.model_validate(response)
+            )
+            if isinstance(grant, SkillIssuedGrant) and sorted(grant.skills) != skills:
+                raise ValueError
+            pattern = r"a2a_[A-Za-z0-9_-]{43}" if skills is None else r"a2c_[A-Za-z0-9_-]{43}"
             if (
                 (grant.audience, grant.caller_root, grant.recipient_agent_id, sorted(grant.scopes))
                 != fields
-                or not re.fullmatch(r"a2a_[A-Za-z0-9_-]{43}", grant.token.get_secret_value())
+                or not re.fullmatch(pattern, grant.token.get_secret_value())
                 or not now < grant.expires_at <= datetime.now(UTC) + timedelta(hours=24, seconds=30)
             ):
                 raise ValueError
@@ -426,6 +453,7 @@ class CommonsClient:
         approval_id: UUID,
         caller_root: str,
         scopes: list[Method],
+        skills: list[str] | None = None,
     ) -> BoundGrant:
         """Verify a caller-approved reference and redeem a fresh, endpoint-bound credential."""
         claim = self._verified_destination(destination)
@@ -442,6 +470,7 @@ class CommonsClient:
             scopes,
             audience,
             exchange,
+            skills,
         )
         return BoundGrant(
             destination=destination,
@@ -479,6 +508,8 @@ class CommonsClient:
         return task
 
     def _task(self, grant: BoundGrant, method: Method, params: dict) -> TaskStatistics:
+        if isinstance(grant.grant, SkillIssuedGrant):
+            raise CommonsError("Typed collaboration execution is unavailable")
         if grant.home_origin != self.origin:
             raise CommonsError("Credential belongs to a different Agent Commons home server")
         if method not in grant.grant.scopes:

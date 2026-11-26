@@ -567,3 +567,89 @@ def test_preview_shared_burst_and_noisy_peer_across_processes(enrollment, tmp_pa
         count = db.scalar(select(func.count()).select_from(A2ATask))
         assert count == accepted + 5 + sum(code == 200 for code, _ in more)
     assert noisy["token"] not in caplog.text and good["token"] not in caplog.text
+
+
+def test_typed_enrollment_isolation_admission_and_rotation(enrollment, monkeypatch):
+    from agent_commons.peer_enrollment import admit_typed_task, authenticate_grant
+    from agent_commons.peer_protocol import SkillEnrollmentChallenge
+
+    http, approval_id, key, root, recipient, reference = enrollment
+    legacy = enrolled(http, approval_id, key)
+    skills = ["analysis.summary@1"]
+    monkeypatch.setattr(
+        settings,
+        "collaboration_skills",
+        {
+            recipient: [*skills, "report.markdown@1"],
+        },
+    )
+    with SessionLocal.begin() as db:
+        typed_id = approve_peer(
+            db,
+            reference_id=reference,
+            expected_root=root,
+            recipient=recipient,
+            scopes=SCOPES,
+            skills=skills,
+        )
+    body = http.post(_path(typed_id, "challenge")).json()
+    signed = SkillEnrollmentChallenge.model_validate(body)
+    assert signed.signing_payload().startswith("agent-commons/peer-enrollment/v2\n")
+    wrong = signed.model_copy(update={"skills": ["report.markdown@1"]})
+    assert redeem(http, typed_id, key, wrong).status_code == 403
+    assert redeem(http, typed_id, key, signed.model_copy(update={"version": 1})).status_code == 403
+    issued = redeem(http, typed_id, key, signed)
+    assert issued.status_code == 200
+    token = issued.json()["token"]
+    assert issued.json()["skills"] == skills
+    assert call(http, token).status_code == 401
+    assert authenticate_grant(hash_api_key(token)) is None
+
+    raw = {
+        "skill": "analysis.summary@1",
+        "message_id": "spike",
+        "deadline": (datetime.now(UTC) + timedelta(seconds=10)).isoformat(),
+        "input": {"values": [2, 3]},
+    }
+    fields = dict(bearer=token, caller_root=root, recipient=recipient, audience=AUDIENCE)
+    req, digest = admit_typed_task(json.dumps(raw).encode(), **fields)
+    assert req.skill == skills[0] and len(digest) == 64
+    for changes in (
+        {"bearer": legacy["token"]},
+        {"recipient": uuid4()},
+        {"audience": "https://elsewhere.example"},
+        {"caller_root": "sha256:" + "f" * 64},
+    ):
+        with pytest.raises(HTTPException) as error:
+            admit_typed_task(json.dumps(raw).encode(), **{**fields, **changes})
+        assert error.value.status_code == 403
+
+    unauthorized = {
+        **raw,
+        "skill": "report.markdown@1",
+        "input": {
+            "title": "Example",
+            "summary": {"count": 1, "total": 2, "minimum": 2, "maximum": 2},
+        },
+    }
+    with pytest.raises(HTTPException) as error:
+        admit_typed_task(json.dumps(unauthorized).encode(), **fields)
+    assert error.value.status_code == 403
+
+    grant_id = UUID(issued.json()["grant_id"])
+    with SessionLocal.begin() as db:
+        change_grant(db, grant_id, rotate=True)
+    rotated = SkillEnrollmentChallenge.model_validate(
+        http.post(_path(typed_id, "challenge")).json()
+    )
+    assert rotated.skills == skills
+    replacement = redeem(http, typed_id, key, rotated)
+    assert replacement.status_code == 200 and replacement.json()["skills"] == skills
+
+    with SessionLocal.begin() as db:
+        change_grant(db, grant_id, rotate=False)
+        db.get(PeerGrant, UUID(replacement.json()["grant_id"])).expires_at = datetime.now(UTC)
+    for unavailable in (token, replacement.json()["token"]):
+        with pytest.raises(HTTPException) as error:
+            admit_typed_task(json.dumps(raw).encode(), **{**fields, "bearer": unavailable})
+        assert error.value.status_code == 403

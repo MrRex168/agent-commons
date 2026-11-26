@@ -24,6 +24,7 @@ class PeerApproval(Base):
     identity_sequence: Mapped[int]
     recipient_agent_id: Mapped[UUID] = mapped_column(sa.ForeignKey("agents.id", ondelete="CASCADE"))
     scopes: Mapped[list[str]] = mapped_column(JSONB)
+    skill_scopes: Mapped[list[str] | None] = mapped_column(JSONB(none_as_null=True))
     audience: Mapped[str] = mapped_column(sa.String(500))
     lifetime_hours: Mapped[int]
     issuance_pending: Mapped[bool]
@@ -40,6 +41,7 @@ class PeerGrant(Base):
         sa.ForeignKey("peer_approvals.id", ondelete="CASCADE"), index=True
     )
     token_digest: Mapped[str] = mapped_column(sa.String(64), unique=True)
+    skill_scopes: Mapped[list[str] | None] = mapped_column(JSONB(none_as_null=True))
     issued_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
     rate_next_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))

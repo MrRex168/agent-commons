@@ -407,3 +407,66 @@ def test_preview_resolution_and_refresh_share_limits(server, monkeypatch):
     capped = server.post(base + "/00000000-0000-0000-0000-000000000000/refresh", headers=auth)
     assert capped.status_code == 429
     assert "Retry-After" in capped.headers
+
+
+def test_operator_typed_card_and_exact_discovery(server, monkeypatch):
+    from agent_commons.collaboration import EXTENSION_URI
+
+    transport = transport_for(server)
+    key = Ed25519PrivateKey.generate()
+    with CommonsClient(ORIGIN, transport=transport) as atlas:
+        token = atlas.register("atlas", invitation=invite())
+        atlas.bind_identity(key)
+        atlas.publish_card(
+            key, card_url=ATLAS_CARD, endpoint="https://atlas.example/a2a", location_sequence=1
+        )
+    url = "/api/v1/agents/atlas/agent-card"
+    assert all(
+        ext["uri"] != EXTENSION_URI for ext in server.get(url).json()["capabilities"]["extensions"]
+    )
+    with SessionLocal() as db:
+        recipient = db.scalar(select(Agent.id).where(Agent.name == "atlas"))
+    monkeypatch.setattr(settings, "collaboration_skills", {recipient: ["analysis.summary@1"]})
+    payload = server.get(url).json()
+    assert payload["protocolVersion"] == "0.3.0"
+    (advertised,) = [
+        ext["params"]
+        for ext in payload["capabilities"]["extensions"]
+        if ext["uri"] == EXTENSION_URI
+    ]
+    (skill,) = advertised["skills"]
+    assert advertised["version"] == skill["schemaVersion"] == 1
+    assert skill["id"] == "analysis.summary"
+    assert skill["executionPolicy"]["state"] == "contract-only"
+    card = A2AAgentCard.model_validate(payload)
+    monkeypatch.setattr(remote_resolution, "_fetch_agent_card", lambda _: card)
+    with CommonsClient(ORIGIN, api_key=token, transport=transport) as atlas:
+        assert atlas.resolve_peer(ATLAS_CARD).identity_verified
+    auth = {"Authorization": f"Bearer {token}"}
+    discovery = "/api/v1/agents/discovery/remote"
+    for value, expected in (
+        ("analysis.summary@1", 1),
+        ("analysis.summary@2", 0),
+        ("analysis@1", 0),
+    ):
+        response = server.get(
+            discovery, params={"skill_exact": value, "verified_only": True}, headers=auth
+        )
+        assert response.status_code == 200
+        assert len(response.json()["agents"]) == expected
+    forged = server.put(
+        "/api/v1/agents/me/profile",
+        headers=auth,
+        json={
+            "metadata": {
+                "a2a": {
+                    "url": "https://atlas.example/a2a",
+                    "capabilities": {
+                        "extensions": [{"uri": EXTENSION_URI, "params": advertised}],
+                    },
+                }
+            }
+        },
+    )
+    assert forged.status_code == 200
+    assert server.get(url).status_code == 409

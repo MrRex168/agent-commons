@@ -8,7 +8,7 @@ import httpx
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from agent_commons.endpoint_authorization import canonical_endpoint_url
-from agent_commons.peer_protocol import IssuedGrant, Root, https_audience
+from agent_commons.peer_protocol import IssuedGrant, Root, SkillIssuedGrant, https_audience
 
 
 class DestinationApproval(BaseModel):
@@ -46,18 +46,27 @@ class BoundGrant(BaseModel):
 
     destination: DestinationApproval
     home_origin: str
-    grant: IssuedGrant
+    grant: SkillIssuedGrant | IssuedGrant
     expires_at: AwareDatetime
     identity_sequence: int = Field(ge=0)
     location_sequence: int = Field(ge=1)
 
+    @model_validator(mode="before")
+    @classmethod
+    def check_version(cls, data):
+        if isinstance(data, dict) and isinstance(grant := data.get("grant"), dict):
+            if "version" in grant or "skills" in grant:
+                SkillIssuedGrant.model_validate(grant)
+        return data
+
     @model_validator(mode="after")
     def matching_grant(self):
+        prefix = "a2c_" if isinstance(self.grant, SkillIssuedGrant) else "a2a_"
         if (
             self.grant.audience != self.destination.audience
             or self.grant.recipient_agent_id != self.destination.recipient_agent_id
             or self.grant.expires_at != self.expires_at
-            or not re.fullmatch(r"a2a_[A-Za-z0-9_-]{43}", self.grant.token.get_secret_value())
+            or not re.fullmatch(prefix + r"[A-Za-z0-9_-]{43}", self.grant.token.get_secret_value())
         ):
             raise ValueError("Grant does not match the approved destination")
         return self
