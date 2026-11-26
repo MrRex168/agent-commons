@@ -1,0 +1,281 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent Commons staging validation report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "mode",
+    "checks",
+    "metrics"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "mode": {
+      "enum": [
+        "smoke",
+        "rotate",
+        "revoke",
+        "capture",
+        "cutover",
+        "load",
+        "noise",
+        "db-failure",
+        "audit",
+        "migrate",
+        "operator",
+        "quota-stats"
+      ]
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preflight",
+        "public_origins",
+        "send_get",
+        "idempotency",
+        "ownership",
+        "rotation",
+        "revocation",
+        "signed_migration",
+        "preserved_relationship",
+        "fresh_destination",
+        "stale_location",
+        "load",
+        "no_duplicate_tasks",
+        "retention",
+        "noisy_peer",
+        "database_failure",
+        "quota_db_timing",
+        "independent_operators",
+        "database_isolation",
+        "two_workers",
+        "ingress",
+        "egress",
+        "tls_forwarding",
+        "log_redaction",
+        "fresh_install",
+        "invitation_and_card",
+        "rollback_rehearsal"
+      ],
+      "properties": {
+        "preflight": {
+          "$ref": "#/$defs/status"
+        },
+        "public_origins": {
+          "$ref": "#/$defs/status"
+        },
+        "send_get": {
+          "$ref": "#/$defs/status"
+        },
+        "idempotency": {
+          "$ref": "#/$defs/status"
+        },
+        "ownership": {
+          "$ref": "#/$defs/status"
+        },
+        "rotation": {
+          "$ref": "#/$defs/status"
+        },
+        "revocation": {
+          "$ref": "#/$defs/status"
+        },
+        "signed_migration": {
+          "$ref": "#/$defs/status"
+        },
+        "preserved_relationship": {
+          "$ref": "#/$defs/status"
+        },
+        "fresh_destination": {
+          "$ref": "#/$defs/status"
+        },
+        "stale_location": {
+          "$ref": "#/$defs/status"
+        },
+        "load": {
+          "$ref": "#/$defs/status"
+        },
+        "no_duplicate_tasks": {
+          "$ref": "#/$defs/status"
+        },
+        "retention": {
+          "$ref": "#/$defs/status"
+        },
+        "noisy_peer": {
+          "$ref": "#/$defs/status"
+        },
+        "database_failure": {
+          "$ref": "#/$defs/status"
+        },
+        "quota_db_timing": {
+          "$ref": "#/$defs/status"
+        },
+        "independent_operators": {
+          "$ref": "#/$defs/status"
+        },
+        "database_isolation": {
+          "$ref": "#/$defs/status"
+        },
+        "two_workers": {
+          "$ref": "#/$defs/status"
+        },
+        "ingress": {
+          "$ref": "#/$defs/status"
+        },
+        "egress": {
+          "$ref": "#/$defs/status"
+        },
+        "tls_forwarding": {
+          "$ref": "#/$defs/status"
+        },
+        "log_redaction": {
+          "$ref": "#/$defs/status"
+        },
+        "fresh_install": {
+          "$ref": "#/$defs/status"
+        },
+        "invitation_and_card": {
+          "$ref": "#/$defs/status"
+        },
+        "rollback_rehearsal": {
+          "$ref": "#/$defs/status"
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scheduled_pairs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "completed_pairs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unique_completed_task_ids": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resolution_429_responses": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "retained_tasks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "duration_seconds": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "call_p95_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "resolution_p95_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "dispatch_p95_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "quota_response_p95_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "failed_pairs": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "429": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "503": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "other": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "missed": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "429",
+            "503",
+            "other",
+            "missed"
+          ]
+        },
+        "quota_db_timing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bucket",
+            "grant"
+          ],
+          "properties": {
+            "bucket": {
+              "$ref": "#/$defs/quota_stat"
+            },
+            "grant": {
+              "$ref": "#/$defs/quota_stat"
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "status": {
+      "enum": [
+        "pass",
+        "fail",
+        "not_executed"
+      ]
+    },
+    "quota_stat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "calls",
+        "mean_ms"
+      ],
+      "properties": {
+        "calls": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "mean_ms": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}
