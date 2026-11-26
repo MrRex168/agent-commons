@@ -8,6 +8,7 @@ from agent_commons import (  # noqa: F401
     freshness_models,
     migration_models,
     models,
+    peer_models,
     recovery_models,
     registration,
     remote_models,

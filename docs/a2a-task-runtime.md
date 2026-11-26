@@ -105,3 +105,6 @@ verified lineage, or signed location grants no task access.
 
 See the [upstream SDK compatibility spike](open-agent-network/a2a-compatibility.md)
 for the tested client version and wire protocol boundaries.
+
+For opt-in, database-backed receiving-side grants, see the
+[peer enrollment runbook](open-agent-network/peer-enrollment.md).

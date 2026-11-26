@@ -21,6 +21,7 @@ from agent_commons.a2a_task_models import A2ATask
 from agent_commons.config import A2ATaskPeer, settings
 from agent_commons.db import SessionLocal
 from agent_commons.models import Agent
+from agent_commons.peer_enrollment import authenticate_grant, require_audience
 
 router = APIRouter(tags=["a2a-tasks"])
 MAX_REQUEST_BYTES = 16_384
@@ -77,17 +78,23 @@ class GetParams(StrictModel):
     historyLength: int | None = Field(default=None, ge=0)
 
 
-def _authenticate(request: Request) -> A2ATaskPeer:
+async def _authenticate(request: Request) -> A2ATaskPeer:
     values = request.headers.getlist("authorization")
     if len(values) == 1:
         scheme, _, token = values[0].partition(" ")
         if scheme.lower() == "bearer" and TOKEN_PATTERN.fullmatch(token):
             token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
-            for peer in settings.a2a_task_peers:
-                if secrets.compare_digest(peer.token_sha256, token_hash):
-                    if peer.expires_at > datetime.now(UTC):
-                        return peer
-                    break
+            if settings.a2a_database_grants:
+                require_audience(request)
+                peer = await run_in_threadpool(authenticate_grant, token_hash)
+                if peer is not None:
+                    return peer
+            else:
+                for peer in settings.a2a_task_peers:
+                    if secrets.compare_digest(peer.token_sha256, token_hash):
+                        if peer.expires_at > datetime.now(UTC):
+                            return peer
+                        break
     raise HTTPException(401, "Invalid A2A peer credential", headers={"WWW-Authenticate": "Bearer"})
 
 
@@ -248,11 +255,11 @@ def _dispatch(peer: A2ATaskPeer, rpc: RPCRequest) -> dict:
 
 @router.post("/a2a")
 async def run_a2a_task(request: Request) -> dict:
-    peer = _authenticate(request)
     if not REQUEST_SLOTS.acquire(blocking=False):
         raise HTTPException(503, "A2A runtime is busy")
     request_id = None
     try:
+        peer = await _authenticate(request)
         raw = await _read_json(request)
         try:
             rpc = RPCRequest.model_validate(raw)
