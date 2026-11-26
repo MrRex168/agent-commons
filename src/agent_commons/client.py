@@ -13,6 +13,12 @@ from pydantic import BaseModel, Field
 
 from agent_commons.endpoint_authorization import EndpointAuthorization, canonical_endpoint_url
 from agent_commons.identity_crypto import ED25519_MULTICODEC_PREFIX, identity_fingerprint
+from agent_commons.peer_protocol import (
+    EnrollmentChallenge,
+    IssuedGrant,
+    Method,
+    https_audience,
+)
 from agent_commons.security import REGISTRATION_INVITATION_HEADER
 
 
@@ -286,6 +292,62 @@ class CommonsClient:
             },
         )
         return root
+
+    def enroll_peer(
+        self,
+        key: Ed25519PrivateKey,
+        *,
+        approval_id: UUID,
+        caller_root: str,
+        recipient_agent_id: UUID,
+        scopes: list[Method],
+    ) -> IssuedGrant:
+        audience = https_audience(self.origin)
+        path = f"peers/{UUID(str(approval_id))}"
+        fields = (audience, caller_root, recipient_agent_id, sorted(set(scopes)))
+        if not scopes or not set(scopes) <= {"message/send", "tasks/get"}:
+            raise CommonsError("Specify the expected task method scopes")
+        response = self._request("Peer challenge", "POST", path + "/challenge", authenticated=False)
+        try:
+            challenge = EnrollmentChallenge.model_validate(response)
+            now = datetime.now(UTC)
+            if (
+                challenge.approval_id != approval_id
+                or challenge.controller != public_multikey(key)
+                or (
+                    challenge.audience,
+                    challenge.caller_root,
+                    challenge.recipient_agent_id,
+                    sorted(challenge.scopes),
+                )
+                != fields
+                or not now < challenge.expires_at <= now + timedelta(minutes=5, seconds=30)
+            ):
+                raise ValueError
+        except ValueError:
+            raise CommonsError("Peer challenge did not match the expected approval") from None
+        response = self._request(
+            "Peer redemption",
+            "POST",
+            path + "/redeem",
+            authenticated=False,
+            body={
+                "challenge_id": str(challenge.challenge_id),
+                "signature_multibase": _sign(key, challenge.signing_payload()),
+            },
+        )
+        try:
+            grant = IssuedGrant.model_validate(response)
+            if (
+                (grant.audience, grant.caller_root, grant.recipient_agent_id, sorted(grant.scopes))
+                != fields
+                or not re.fullmatch(r"a2a_[A-Za-z0-9_-]{43}", grant.token.get_secret_value())
+                or not now < grant.expires_at <= datetime.now(UTC) + timedelta(hours=24, seconds=30)
+            ):
+                raise ValueError
+        except (TypeError, ValueError):
+            raise CommonsError("Peer redemption returned an invalid grant") from None
+        return grant
 
     def resolve_peer(self, card_url: str) -> PeerVerification:
         result = self._request(

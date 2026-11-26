@@ -1,7 +1,9 @@
 # External preview security architecture
 
-Status: proposed for v0.6.0. The compatibility spike adds no production runtime
-controls. The preview admits operator-enrolled peers only.
+Milestone 3A implements opt-in receiving-side grants. Safe outbound transport
+and independent staging remain future work. The preview admits
+operator-enrolled peers only.
+[Peer enrollment runbook](peer-enrollment.md)
 
 ## Trust boundaries
 
@@ -48,7 +50,9 @@ they provide neither global freshness nor proof of exclusive control.
    Use PostgreSQL as the authoritative grant source in preview mode and do
    not cache positive authorization decisions. Preserve legacy static grants
    outside preview mode. Reject mixing static grants and database-backed grants
-   in preview mode so migration cannot bypass revocation.
+   in preview mode so switching credential sources cannot bypass revocation.
+   Controller changes require reapproval for new grants. Operators must revoke
+   already-issued grants when a previously approved controller loses authority.
 
 ## Safe transport and migration
 

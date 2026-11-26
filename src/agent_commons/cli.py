@@ -3,6 +3,7 @@
 import argparse
 import fcntl
 import getpass
+import json
 import os
 import re
 import secrets
@@ -72,7 +73,7 @@ def _read(name: str | Path, *, directory: int | None = None) -> bytes:
         return data
 
 
-def _write(directory: int, name: str, data: bytes) -> None:
+def _write(directory: int, name: str, data: bytes, *, replace: bool = True) -> None:
     temp = ".tmp-" + secrets.token_hex(12)
     fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | FILE_FLAGS, 0o600, dir_fd=directory)
     try:
@@ -80,7 +81,11 @@ def _write(directory: int, name: str, data: bytes) -> None:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temp, name, src_dir_fd=directory, dst_dir_fd=directory)
+        if replace:
+            os.replace(temp, name, src_dir_fd=directory, dst_dir_fd=directory)
+        else:
+            os.link(temp, name, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
+            os.unlink(temp, dir_fd=directory)
         os.fsync(directory)
     finally:
         try:
@@ -165,6 +170,49 @@ def _operator_invite(path: Path) -> None:
     print("Single-use invitation saved to a private file. It expires in 15 minutes.")
 
 
+def _operator_peer(args) -> None:
+    from agent_commons.db import SessionLocal
+    from agent_commons.peer_enrollment import approve_peer, change_grant
+
+    with SessionLocal.begin() as db:
+        if args.command == "peer-approve":
+            approval_id = approve_peer(
+                db,
+                reference_id=args.reference,
+                expected_root=args.caller_root,
+                recipient=args.recipient,
+                scopes=args.scope,
+                lifetime_hours=args.hours,
+            )
+        else:
+            approval_id = change_grant(db, args.grant, rotate=args.command == "peer-rotate")
+    if args.command == "peer-revoke":
+        print("Peer grant revoked.")
+    else:
+        print(f"Enrollment approval: {approval_id}")
+
+
+def _enroll_peer(args, directory: int, key: Ed25519PrivateKey) -> None:
+    with CommonsClient(args.url) as client:
+        grant = client.enroll_peer(
+            key,
+            approval_id=args.approval,
+            caller_root=args.caller_root,
+            recipient_agent_id=args.recipient,
+            scopes=args.scope,
+        )
+    name = f"peer-{grant.grant_id}.json"
+    raw = grant.model_dump(mode="json")
+    raw["token"] = grant.token.get_secret_value()
+    try:
+        _write(directory, name, json.dumps(raw).encode("utf-8"), replace=False)
+    except OSError:
+        raise CommonsError(
+            f"Could not save issued grant {grant.grant_id}. Ask the operator to revoke it"
+        ) from None
+    print(f"Peer grant saved privately: {grant.grant_id}")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent-commons", description=__doc__)
     parser.add_argument("--config", type=Path, default=Path.home() / ".agent-commons")
@@ -191,6 +239,21 @@ def _parser() -> argparse.ArgumentParser:
     inspect.add_argument("reference_id", type=UUID)
     issue = commands.add_parser("issue-invite", help="Issue an invitation as a database operator")
     issue.add_argument("--output", type=Path, required=True)
+    approve = commands.add_parser("peer-approve", help="Approve enrollment as database operator")
+    approve.add_argument("--reference", required=True, type=UUID)
+    approve.add_argument("--hours", type=int, default=1)
+    enroll = commands.add_parser("peer-enroll", help="Redeem a peer approval with a local key")
+    enroll.add_argument("--url", required=True)
+    enroll.add_argument("--approval", required=True, type=UUID)
+    for command in (approve, enroll):
+        command.add_argument("--caller-root", required=True)
+        command.add_argument("--recipient", required=True, type=UUID)
+        command.add_argument(
+            "--scope", required=True, action="append", choices=["message/send", "tasks/get"]
+        )
+    for name in ("peer-rotate", "peer-revoke"):
+        command = commands.add_parser(name)
+        command.add_argument("--grant", required=True, type=UUID)
     return parser
 
 
@@ -202,9 +265,16 @@ def run(args) -> None:
         _operator_invite(args.output)
         return
 
+    if args.command in ("peer-approve", "peer-rotate", "peer-revoke"):
+        _operator_peer(args)
+        return
+
     with _directory(args.config) as directory:
         account = LocalAccount.model_validate_json(_read("account.json", directory=directory))
         key = Ed25519PrivateKey.from_private_bytes(_read("controller.key", directory=directory))
+        if args.command == "peer-enroll":
+            _enroll_peer(args, directory, key)
+            return
         with CommonsClient(account.origin, api_key=account.api_key) as client:
             match args.command:
                 case "register":

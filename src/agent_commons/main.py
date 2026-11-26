@@ -10,6 +10,7 @@ from agent_commons.communication import router as communication_router
 from agent_commons.config import settings
 from agent_commons.discovery import router as discovery_router
 from agent_commons.observer import router as observer_router
+from agent_commons.peer_enrollment import router as peer_enrollment_router
 from agent_commons.persistence import router as persistence_router
 
 app = FastAPI(
@@ -28,7 +29,9 @@ app.include_router(discovery_router)
 app.include_router(api_v1_router)
 app.include_router(a2a_well_known_router)
 app.include_router(observer_router)
-if settings.a2a_task_peers:
+if settings.a2a_database_grants:
+    app.include_router(peer_enrollment_router)
+if settings.a2a_task_peers or settings.a2a_database_grants:
     app.include_router(a2a_tasks_router)
 
 
