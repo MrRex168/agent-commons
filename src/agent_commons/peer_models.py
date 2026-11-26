@@ -42,4 +42,5 @@ class PeerGrant(Base):
     token_digest: Mapped[str] = mapped_column(sa.String(64), unique=True)
     issued_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+    rate_next_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))

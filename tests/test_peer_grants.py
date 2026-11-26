@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
 from uuid import UUID, uuid4
@@ -16,13 +16,14 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
 from test_lineage_v2 import _keypair, _signature
 from test_onboarding import transport_for
 from test_remote_agent_resolution import CARD_URL, _card, _proof, _root_lineage
 
-from agent_commons import a2a_tasks, cli, peer_enrollment
+from agent_commons import a2a_tasks, cli, peer_enrollment, preview_limits
+from agent_commons.a2a_task_models import A2ATask
 from agent_commons.client import CommonsClient, CommonsError
 from agent_commons.config import A2ATaskPeer, Settings, settings
 from agent_commons.db import Base, SessionLocal, engine
@@ -378,9 +379,8 @@ def test_read_only_grant_cannot_submit_tasks(enrollment):
     assert call(http, grant["token"]).status_code == 403
 
 
-def test_revocation_is_visible_to_two_server_processes(enrollment, tmp_path):
-    http, approval_id, key, *_ = enrollment
-    grant = enrolled(http, approval_id, key)
+@contextmanager
+def live_workers(tmp_path, **settings_env):
     cert, private, tls = make_tls(tmp_path)
     env = {
         "PATH": os.environ["PATH"],
@@ -389,6 +389,7 @@ def test_revocation_is_visible_to_two_server_processes(enrollment, tmp_path):
         "AGENT_COMMONS_A2A_DATABASE_GRANTS": "true",
         "AGENT_COMMONS_REGISTRATION_ADMISSION": "invite",
         "AGENT_COMMONS_A2A_TASK_PEERS": "[]",
+        **settings_env,
     }
     with ExitStack() as resources:
         origins = []
@@ -434,6 +435,13 @@ def test_revocation_is_visible_to_two_server_processes(enrollment, tmp_path):
             else:
                 pytest.fail("Peer grant worker did not start", pytrace=False)
 
+        yield client, origins
+
+
+def test_revocation_is_visible_to_two_server_processes(enrollment, tmp_path):
+    http, approval_id, key, *_ = enrollment
+    grant = enrolled(http, approval_id, key)
+    with live_workers(tmp_path) as (client, origins):
         headers = {"Authorization": "Bearer " + grant["token"]}
         for origin in origins:
             response = client.post(origin + "/a2a", json=TASK, headers=headers)
@@ -442,3 +450,120 @@ def test_revocation_is_visible_to_two_server_processes(enrollment, tmp_path):
             change_grant(db, UUID(grant["grant_id"]), rotate=False)
         for origin in origins:
             assert client.post(origin + "/a2a", json=TASK, headers=headers).status_code == 401
+
+
+def test_preview_admission_fails_closed_and_does_not_execute(enrollment, monkeypatch):
+    http, approval_id, key, *_ = enrollment
+    grant = enrolled(http, approval_id, key)
+    monkeypatch.setattr(settings, "preview_limits", True)
+
+    def fail():
+        raise OperationalError("safe test failure", {}, None)
+
+    monkeypatch.setattr(preview_limits.SessionLocal, "begin", fail)
+    response = call(http, grant["token"])
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Preview admission is unavailable"}
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count()).select_from(A2ATask)) == 0
+
+
+def test_preview_invalid_requests_and_instance_quota(enrollment, monkeypatch):
+    http, approval_id, key, *_ = enrollment
+    grant = enrolled(http, approval_id, key)
+    monkeypatch.setattr(settings, "preview_limits", True)
+    monkeypatch.setattr(settings, "preview_task_burst_per_grant", 2)
+    monkeypatch.setattr(settings, "preview_task_rate_per_grant", 0.1)
+    monkeypatch.setattr(settings, "preview_tasks_per_second", 1)
+    first = call(http, grant["token"])
+    assert first.status_code == 200 and first.json().get("result")
+    get_task = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tasks/get",
+        "params": {"id": first.json()["result"]["id"]},
+    }
+    capped = call(http, grant["token"], get_task)
+    assert capped.status_code == 429 and capped.json()["id"] == 2
+    assert capped.json()["error"]["code"] == -32012
+    assert call(http, grant["token"], {"malformed": True}).status_code == 429
+    with SessionLocal.begin() as db:
+        db.get(PeerGrant, UUID(grant["grant_id"])).rate_next_at = datetime.now(UTC)
+        db.get(preview_limits.PreviewQuota, "tasks").timestamps = [
+            datetime.now(UTC) - timedelta(seconds=2)
+        ]
+    assert "error" in call(http, grant["token"], {"malformed": True}).json()
+    assert "result" in call(http, grant["token"], get_task).json()
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count()).select_from(A2ATask)) == 1
+
+
+def test_preview_shared_burst_and_noisy_peer_across_processes(enrollment, tmp_path, caplog):
+    http, approval_id, key, _, recipient, _ = enrollment
+    noisy = enrolled(http, approval_id, key)
+    good_key, good_public = _keypair()
+    lineage = _root_lineage(good_public)
+    good_url = "https://other.example/agent-card"
+    with SessionLocal() as db:
+        reference = _store_reference(
+            good_url, _card(lineage, _proof(good_key, lineage, card_url=good_url)), db
+        )
+        good_ref = reference.id
+    with SessionLocal.begin() as db:
+        good_approval = approve_peer(
+            db,
+            reference_id=good_ref,
+            expected_root=lineage["root_fingerprint"],
+            recipient=recipient,
+            scopes=SCOPES,
+        )
+    good = enrolled(http, good_approval, good_key)
+    with live_workers(tmp_path, AGENT_COMMONS_PREVIEW_LIMITS="true") as (client, origins):
+
+        def send(origin, grant, message_id):
+            body = json.loads(json.dumps(TASK))
+            body["params"]["message"]["messageId"] = message_id
+            start = time.perf_counter()
+            response = client.post(
+                origin + "/a2a", json=body, headers={"Authorization": "Bearer " + grant["token"]}
+            )
+            assert grant["token"] not in response.text
+            return response.status_code, (time.perf_counter() - start) * 1000
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            ready = Barrier(2)
+
+            def flood(origin):
+                ready.wait(timeout=5)
+                return [send(origin, noisy, f"noise-{origin[-5:]}-{i}") for i in range(8)]
+
+            first, second = [pool.submit(flood, origin) for origin in origins]
+            noise = first.result(timeout=10) + second.result(timeout=10)
+            accepted = sum(code == 200 for code, _ in noise)
+            assert 5 <= accepted <= 5 + int(sum(delay for _, delay in noise) / 500)
+            assert any(code == 429 for code, _ in noise)
+            noisy_run = pool.submit(
+                lambda: [send(origins[0], noisy, f"later-{i}") for i in range(32)]
+            )
+            good_result = [send(origins[1], good, f"good-{i}") for i in range(4)]
+            more = noisy_run.result(timeout=10)
+            assert all(code == 200 for code, _ in good_result)
+            assert any(code == 429 for code, _ in more)
+            latencies = sorted(delay for _, delay in [*noise, *more, *good_result])
+            p95 = latencies[int(0.95 * (len(latencies) - 1))]
+            print(f"Preview HTTPS smoke: {len(latencies)} calls, p95 {p95:.2f} ms")
+
+            # Two eligible grants running on separate servers race for the
+            # tenth instance-wide slot in the same rolling second.
+            with SessionLocal.begin() as db:
+                db.get(preview_limits.PreviewQuota, "tasks").timestamps = [datetime.now(UTC)] * 9
+                for grant in (noisy, good):
+                    db.get(PeerGrant, UUID(grant["grant_id"])).rate_next_at = None
+            left = pool.submit(send, origins[0], noisy, "last-noisy")
+            right = pool.submit(send, origins[1], good, "last-good")
+            assert sorted([left.result(timeout=5)[0], right.result(timeout=5)[0]]) == [200, 429]
+
+    with SessionLocal() as db:
+        count = db.scalar(select(func.count()).select_from(A2ATask))
+        assert count == accepted + 5 + sum(code == 200 for code, _ in more)
+    assert noisy["token"] not in caplog.text and good["token"] not in caplog.text

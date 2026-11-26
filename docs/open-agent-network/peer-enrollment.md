@@ -30,7 +30,7 @@ proxy configuration. Restrict ingress and redact Authorization headers and
 redemption bodies in logs. All workers must query the primary PostgreSQL
 database for authorization. Use the existing operator-controlled ingress
 and resolver restrictions.
-[Registration and developer setup](onboarding.md)
+[Registration and developer setup](onboarding.md) · [Preview quota setup](preview-capacity.md)
 
 ## Approve and enroll
 

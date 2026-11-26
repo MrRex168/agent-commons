@@ -99,7 +99,9 @@ until the next submission.
 
 Use TLS, ingress body and timeout limits, per-peer rate limits, and a
 restricted peer allowlist for a hosted demo. The admission limit is per worker;
-shared rate limits and network-level deadlines belong at ingress.
+preview deployments can also enable shared PostgreSQL task quotas. Apply
+network-level deadlines and unauthenticated rate limits at ingress.
+[Preview quotas and HTTP/JSON-RPC errors](open-agent-network/preview-capacity.md)
 A bearer credential grants only its configured method scopes. A follow,
 verified lineage, or signed location grants no task access.
 

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from agent_commons.config import settings
 from agent_commons.db import Base
+from agent_commons.preview_limits import consume, shard
 from agent_commons.security import REGISTRATION_INVITATION_HEADER, hash_api_key
 
 TOKEN_PATTERN = re.compile(r"aci_[A-Za-z0-9_-]{43}")
@@ -38,6 +39,9 @@ def issue_invitation(db: Session) -> str:
 def require_registration_admission(db: Session, request: Request) -> None:
     if settings.registration_admission == "open":
         return
+    if settings.preview_limits:
+        source = request.client.host if request.client else ""
+        consume(f"registration-attempt:{shard(source)}", 15, 60)
     tokens = request.headers.getlist(REGISTRATION_INVITATION_HEADER)
     if len(tokens) == 1 and TOKEN_PATTERN.fullmatch(tokens[0]):
         now = func.clock_timestamp()
@@ -52,5 +56,7 @@ def require_registration_admission(db: Session, request: Request) -> None:
             .returning(RegistrationInvitation.token_digest)
         )
         if consumed is not None:
+            if settings.preview_limits:
+                consume("registration", settings.preview_registrations_per_hour, 3600, db=db)
             return
     raise HTTPException(403, "A valid registration invitation is required")

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import base64
+import json
 from datetime import UTC, datetime
-from typing import Any
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import and_, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, case, cast, func, literal, or_, select, text, tuple_
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session, aliased
 
 from agent_commons.auth import get_current_agent
 from agent_commons.db import get_db
@@ -14,6 +18,8 @@ from agent_commons.models import Agent
 from agent_commons.remote_models import EndpointStatus, RemoteAgentReference
 
 router = APIRouter(prefix="/agents/discovery", tags=["federated-discovery"])
+PAGE_SIZE = 25
+SCAN_SIZE = 250
 
 
 class FederatedAgentSkill(BaseModel):
@@ -43,6 +49,7 @@ class FederatedDiscoveryResults(BaseModel):
     query: str
     skill: str | None
     agents: list[FederatedAgentProfile]
+    next_cursor: str | None = None
 
 
 def _skills(reference: RemoteAgentReference) -> list[FederatedAgentSkill]:
@@ -60,13 +67,57 @@ def _skills(reference: RemoteAgentReference) -> list[FederatedAgentSkill]:
     return skills
 
 
-def _skill_matches(skills: list[FederatedAgentSkill], needle: str) -> bool:
-    value = needle.casefold()
-    for skill in skills:
-        fields: list[Any] = [skill.id, skill.name, skill.description, *skill.tags]
-        if any(value in str(field).casefold() for field in fields):
-            return True
-    return False
+def _cursor(name: str, identifier: UUID) -> str:
+    return base64.urlsafe_b64encode(
+        json.dumps([name, str(identifier)], ensure_ascii=False).encode()
+    ).decode()
+
+
+def _cursor_key(cursor: str) -> tuple[str, UUID]:
+    try:
+        name, identifier = json.loads(base64.b64decode(cursor, altchars=b"-_", validate=True))
+        if not isinstance(name, str) or len(name) > 200 or "\x00" in name:
+            raise ValueError
+        name.encode("utf-8")
+        return name, UUID(identifier)
+    except (TypeError, ValueError, AttributeError, RecursionError):
+        raise HTTPException(422, "Invalid discovery cursor") from None
+
+
+def _array(value):
+    return case((func.jsonb_typeof(value) == "array", value), else_=cast(literal("[]"), JSONB))
+
+
+def _skill_filter(reference, skill: str):
+    snapshot = reference.card_snapshot
+    entry = func.jsonb_array_elements(_array(snapshot["skills"])).column_valued(
+        "skill_entry", joins_implicitly=True
+    )
+    item = cast(entry, JSONB)
+    tag = func.jsonb_array_elements_text(_array(item["tags"])).column_valued(
+        "skill_tag", joins_implicitly=True
+    )
+    tag_match = select(literal(1)).where(tag.icontains(skill, autoescape=True)).exists()
+    matches = or_(
+        *(
+            item[field].astext.icontains(skill, autoescape=True)
+            for field in ("id", "name", "description")
+        ),
+        tag_match,
+    )
+    return (
+        select(literal(1))
+        .where(
+            *(
+                func.jsonb_typeof(item[field]) == "string"
+                for field in ("id", "name", "description")
+            ),
+            func.jsonb_typeof(item["tags"]) == "array",
+            matches,
+        )
+        .correlate(reference)
+        .exists()
+    )
 
 
 def _profile(reference: RemoteAgentReference, now: datetime) -> FederatedAgentProfile:
@@ -93,37 +144,59 @@ def discover_remote_agents(
     skill: str | None = Query(default=None, min_length=2, max_length=100),
     verified_only: bool = Query(default=False),
     limit: int = Query(default=20, ge=1, le=100),
+    cursor: str | None = Query(default=None, max_length=1800),
     _agent: Agent = Depends(get_current_agent),
     db: Session = Depends(get_db),
 ) -> FederatedDiscoveryResults:
-    """Search resolved remote agents by identity metadata and A2A skills."""
-    query = select(RemoteAgentReference)
-    if q:
-        pattern = f"%{q}%"
-        query = query.where(
-            or_(
-                RemoteAgentReference.name.ilike(pattern),
-                RemoteAgentReference.description.ilike(pattern),
-                RemoteAgentReference.root_fingerprint.ilike(pattern),
-            )
-        )
+    """Search a bounded, keyset-ordered segment of resolved remote agents."""
+    model = RemoteAgentReference
+    page_size = min(limit, PAGE_SIZE)
+    keys = select(model.name, model.id)
+    if cursor is not None:
+        keys = keys.where(tuple_(model.name, model.id) > _cursor_key(cursor))
     now = datetime.now(UTC)
-    authorized = and_(
-        RemoteAgentReference.identity_verified.is_(True),
-        RemoteAgentReference.location_expires_at.is_not(None),
-        RemoteAgentReference.location_expires_at > now,
-    )
-    if verified_only:
-        query = query.where(authorized)
-
-    references = db.scalars(
-        query.order_by(
-            authorized.desc(),
-            RemoteAgentReference.name,
-            RemoteAgentReference.id,
+    try:
+        db.execute(text("SET LOCAL statement_timeout = '750ms'"))
+        candidates = db.execute(keys.order_by(model.name, model.id).limit(SCAN_SIZE + 1)).all()
+        if not candidates:
+            return FederatedDiscoveryResults(query=q, skill=skill, agents=[])
+        # Materialize at most SCAN_SIZE rows before touching large JSON or text values.
+        # Select the original rows by primary key in SQL, including all visibility filters.
+        ids = [row.id for row in candidates[:SCAN_SIZE]]
+        window = (
+            select(model)
+            .where(model.id.in_(ids))
+            .cte("discovery_window")
+            .prefix_with("MATERIALIZED")
         )
-    ).all()
-    profiles = [_profile(item, now) for item in references]
-    if skill is not None:
-        profiles = [item for item in profiles if _skill_matches(item.skills, skill)]
-    return FederatedDiscoveryResults(query=q, skill=skill, agents=profiles[:limit])
+        candidate = aliased(model, window)
+        query = select(candidate)
+        if q:
+            query = query.where(
+                or_(
+                    candidate.name.icontains(q, autoescape=True),
+                    candidate.description.icontains(q, autoescape=True),
+                    candidate.root_fingerprint.icontains(q, autoescape=True),
+                )
+            )
+        if verified_only:
+            query = query.where(
+                and_(candidate.identity_verified.is_(True), candidate.location_expires_at > now)
+            )
+        if skill is not None:
+            query = query.where(_skill_filter(candidate, skill))
+        matches = db.scalars(
+            query.order_by(candidate.name, candidate.id).limit(page_size + 1)
+        ).all()
+    except SQLAlchemyError:
+        raise HTTPException(503, "Remote discovery is unavailable") from None
+
+    profiles = [_profile(item, now) for item in matches[:page_size]]
+    next_cursor = None
+    if len(matches) > page_size:
+        last = matches[page_size - 1]
+        next_cursor = _cursor(last.name, last.id)
+    elif len(candidates) > SCAN_SIZE:
+        last = candidates[SCAN_SIZE - 1]
+        next_cursor = _cursor(last.name, last.id)
+    return FederatedDiscoveryResults(query=q, skill=skill, agents=profiles, next_cursor=next_cursor)

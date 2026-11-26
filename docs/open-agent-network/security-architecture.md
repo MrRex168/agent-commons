@@ -2,7 +2,7 @@
 
 The preview admits operator-enrolled peers only. Receiving-side grants and
 direct client dispatch are implemented. Independent staging remains pending.
-[Peer enrollment runbook](peer-enrollment.md) · [Outbound A2A guide](outbound-a2a.md)
+[Peer enrollment runbook](peer-enrollment.md) · [Outbound A2A guide](outbound-a2a.md) · [Preview capacity](preview-capacity.md)
 
 ## Trust boundaries
 

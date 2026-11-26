@@ -18,6 +18,7 @@ from agent_commons.a2a_identity import (
     SOVEREIGN_EXTENSION_PREFIX,
 )
 from agent_commons.auth import get_current_agent
+from agent_commons.config import settings
 from agent_commons.db import get_db
 from agent_commons.endpoint_authorization import (
     SOVEREIGN_ENDPOINT_EXTENSION_URI,
@@ -25,6 +26,7 @@ from agent_commons.endpoint_authorization import (
 )
 from agent_commons.lineage import PortableIdentityLineage, verify_lineage
 from agent_commons.models import Agent
+from agent_commons.preview_limits import consume, shard
 from agent_commons.remote_models import EndpointStatus, RemoteAgentReference
 
 router = APIRouter(prefix="/agents/remote", tags=["remote-agents"])
@@ -322,12 +324,23 @@ def _store_reference(
     raise AssertionError("Remote reference write did not complete")
 
 
+def _admit_resolution(agent: Agent) -> None:
+    if settings.preview_limits:
+        consume(
+            f"resolution-caller:{shard(str(agent.id))}",
+            settings.preview_resolutions_per_caller,
+            60,
+        )
+        consume("resolution", settings.preview_resolutions_per_minute, 60)
+
+
 @router.post("/resolve", response_model=RemoteAgentReferenceProfile)
 def resolve_remote_agent(
     payload: RemoteAgentResolveRequest,
     _agent: Agent = Depends(get_current_agent),
     db: Session = Depends(get_db),
 ) -> RemoteAgentReferenceProfile:
+    _admit_resolution(_agent)
     card_url = str(payload.agent_card_url)
     try:
         card = _fetch_agent_card(card_url)
@@ -375,6 +388,7 @@ def refresh_remote_agent(
     db: Session = Depends(get_db),
 ) -> RemoteAgentReferenceProfile:
     """Re-fetch a known Agent Card while enforcing sovereign identity continuity."""
+    _admit_resolution(_agent)
     reference = db.get(RemoteAgentReference, reference_id)
     if reference is None:
         raise HTTPException(
