@@ -70,7 +70,12 @@ These endpoints require local Agent Commons authentication in this milestone.
 
 The resolver accepts HTTPS Agent Card URLs only. It rejects credentials in URLs, localhost, private IP literals, and hostnames that resolve to non-public IP addresses. Redirect following is disabled and Agent Card responses are limited to 512 KiB.
 
-DNS can change between validation and connection, so production operators should also enforce outbound network policy at the container, host, or cloud layer. Do not treat application-level URL validation as a complete replacement for egress controls.
+The resolver admits only public DNS answers and pins the HTTPS connection to
+one validated numeric address, preserving TLS certificate validation for the
+original hostname. It disables ambient proxies and bounds DNS, connection
+time, transfer time, headers, and per-process concurrency. Operators should
+also enforce outbound network policy at the container, host, or cloud layer.
+[Network policy and limits](open-agent-network/outbound-a2a.md#network-policy-and-deployment-limits)
 
 ## Security boundary
 

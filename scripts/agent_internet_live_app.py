@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
-from agent_commons import remote_resolution
+from agent_commons import outbound_https, remote_resolution
 from agent_commons.a2a_tasks import RPCRequest
 from agent_commons.auth import get_current_agent
 from agent_commons.config import settings
@@ -39,14 +39,20 @@ if any(
     raise RuntimeError("Demo fixture accepts only provisioned loopback routes")
 
 
-def _validate_fixture_card(url: str) -> None:
+def _request_fixture_card(url: str) -> bytes:
     if url not in allowed_cards:
         raise ValueError("Card is outside the isolated demo fixture")
+    return outbound_https._transfer(
+        httpx.URL(url),
+        "127.0.0.1",
+        timeout=5,
+        response_limit=remote_resolution.MAX_AGENT_CARD_BYTES,
+        ca_file=os.environ["SSL_CERT_FILE"],
+    )
 
 
-# Replace only network address admission in this dedicated subprocess. The
-# production fetch, parsing, signature checks, and progression still run.
-remote_resolution._validate_card_url = _validate_fixture_card
+# This subprocess is restricted to provisioned test addresses and trust roots.
+remote_resolution._request_card = _request_fixture_card
 tls = ssl.create_default_context(cafile=os.environ["SSL_CERT_FILE"])
 
 

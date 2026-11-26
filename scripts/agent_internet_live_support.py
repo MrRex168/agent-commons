@@ -166,6 +166,7 @@ class Server:
         *,
         peers: list | None = None,
         links: list | None = None,
+        database_grants: bool = False,
         app_entrypoint: str = "scripts.agent_internet_live_app:app",
     ) -> None:
         self.stop()
@@ -180,6 +181,9 @@ class Server:
             "AGENT_INTERNET_LIVE_LINKS": json.dumps(links or []),
             "SSL_CERT_FILE": str(cert),
         }
+        if database_grants:
+            env["AGENT_COMMONS_REGISTRATION_ADMISSION"] = "invite"
+            env["AGENT_COMMONS_A2A_DATABASE_GRANTS"] = "true"
         process = subprocess.Popen(
             [
                 sys.executable,

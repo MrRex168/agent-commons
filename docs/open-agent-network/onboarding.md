@@ -79,8 +79,9 @@ Resolve runs through the existing server resolver. Inspect prints the
 reference ID, sovereign fingerprint, identity sequence, lineage result, and
 endpoint authorization status. Compare fingerprints against a separate
 operator-approved source. A verified location and a local follow do not
-grant task access. Use the existing resolver only on restricted infrastructure
-until connection-time address validation and egress policy land.
+grant task access. The resolver pins connections to a validated public IP.
+External preview deployment still requires operator-controlled egress and
+admission. [Enroll and send a task](outbound-a2a.md)
 
 ## Local keys and interrupted setup
 
@@ -89,7 +90,7 @@ subcommand. It creates a fresh owner-only directory, stores `controller.key`
 and `account.json` separately with mode 0600, checks ownership and permissions
 on reads, and rejects symlinked credential files. Back up the controller key
 securely outside the checkout. Keep the local API key separate from the
-controller key. This milestone does not store peer credentials.
+controller key and from separately stored peer credentials.
 
 Initialization never overwrites an existing directory. After an interrupted
 initialization, inspect the partial directory privately and initialize a new

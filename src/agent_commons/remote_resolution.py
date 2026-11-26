@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import ipaddress
 import json
-import socket
 import uuid
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -15,14 +12,17 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from agent_commons import outbound_https
 from agent_commons.a2a import A2A_PROTOCOL_VERSION, A2AAgentCard
 from agent_commons.a2a_identity import (
-    SOVEREIGN_ENDPOINT_EXTENSION_URI,
     SOVEREIGN_EXTENSION_PREFIX,
 )
 from agent_commons.auth import get_current_agent
 from agent_commons.db import get_db
-from agent_commons.endpoint_authorization import SignedEndpointAuthorization
+from agent_commons.endpoint_authorization import (
+    SOVEREIGN_ENDPOINT_EXTENSION_URI,
+    SignedEndpointAuthorization,
+)
 from agent_commons.lineage import PortableIdentityLineage, verify_lineage
 from agent_commons.models import Agent
 from agent_commons.remote_models import EndpointStatus, RemoteAgentReference
@@ -87,89 +87,30 @@ def _profile(reference: RemoteAgentReference) -> RemoteAgentReferenceProfile:
     )
 
 
-def _host_addresses(hostname: str) -> set[str]:
-    try:
-        results = socket.getaddrinfo(hostname, 443, type=socket.SOCK_STREAM)
-        return {item[4][0] for item in results}
-    except socket.gaierror as exc:
-        raise ValueError("Agent Card hostname could not be resolved") from exc
+_validate_card_url = outbound_https.validate_destination
 
 
-def _is_public_address(value: str) -> bool:
-    address = ipaddress.ip_address(value)
-    return address.is_global
-
-
-def _validate_card_url(url: str) -> None:
-    parsed = urlparse(url)
-    if parsed.scheme != "https":
-        raise ValueError("Remote Agent Card URL must use HTTPS")
-    if not parsed.hostname or parsed.username or parsed.password:
-        raise ValueError("Remote Agent Card URL must contain a public hostname without credentials")
-    hostname = parsed.hostname.lower().rstrip(".")
-    if hostname == "localhost" or hostname.endswith(".localhost"):
-        raise ValueError("Localhost Agent Card URLs are not allowed")
-
-    try:
-        literal = ipaddress.ip_address(hostname)
-    except ValueError:
-        addresses = _host_addresses(hostname)
-    else:
-        addresses = {str(literal)}
-
-    if not addresses or any(not _is_public_address(item) for item in addresses):
-        raise ValueError("Remote Agent Card hostname must resolve only to public IP addresses")
-
-
-def _read_limited_response(response: httpx.Response) -> bytes:
-    declared_size = response.headers.get("Content-Length")
-    if declared_size is not None:
-        try:
-            if int(declared_size) > MAX_AGENT_CARD_BYTES:
-                raise HTTPException(
-                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail="Remote Agent Card exceeds the maximum allowed size",
-                )
-        except ValueError:
-            pass
-
-    chunks: list[bytes] = []
-    total = 0
-    for chunk in response.iter_bytes():
-        total += len(chunk)
-        if total > MAX_AGENT_CARD_BYTES:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail="Remote Agent Card exceeds the maximum allowed size",
-            )
-        chunks.append(chunk)
-    return b"".join(chunks)
+def _request_card(url: str) -> bytes:
+    return outbound_https.request(url, response_limit=MAX_AGENT_CARD_BYTES)
 
 
 def _fetch_agent_card(url: str) -> A2AAgentCard:
-    _validate_card_url(url)
     try:
-        with httpx.Client(timeout=5.0, follow_redirects=False) as client:
-            with client.stream(
-                "GET",
-                url,
-                headers={"Accept": "application/json"},
-            ) as response:
-                response.raise_for_status()
-                raw = _read_limited_response(response)
-    except httpx.HTTPError as exc:
+        raw = _request_card(url)
+    except outbound_https.ResponseTooLarge:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Remote Agent Card could not be fetched",
-        ) from exc
+            status_code=413, detail="Remote Agent Card exceeds the maximum allowed size"
+        ) from None
+    except outbound_https.TransferError:
+        raise HTTPException(502, "Remote Agent Card could not be fetched") from None
 
     try:
         card = A2AAgentCard.model_validate(json.loads(raw))
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, RecursionError):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Remote Agent Card is invalid: {exc}",
-        ) from exc
+            detail="Remote Agent Card is invalid",
+        ) from None
     if card.protocolVersion != A2A_PROTOCOL_VERSION:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

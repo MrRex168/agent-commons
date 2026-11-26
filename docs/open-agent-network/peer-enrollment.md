@@ -1,9 +1,9 @@
 # Operator runbook for peer enrollment
 
 Milestone 3A adds receiving-side grants. Use it on operator-restricted
-infrastructure. The production resolver and outgoing task behavior are
-unchanged. Connection-time destination validation and safe dispatch remain
-Milestone 3B work.
+infrastructure. Use the outbound A2A workflow to enroll a grant with an
+exact destination binding for client task dispatch.
+[Outbound enrollment and task commands](outbound-a2a.md)
 
 ## Enable preview grants
 

@@ -1,9 +1,8 @@
 # External preview security architecture
 
-Milestone 3A implements opt-in receiving-side grants. Safe outbound transport
-and independent staging remain future work. The preview admits
-operator-enrolled peers only.
-[Peer enrollment runbook](peer-enrollment.md)
+The preview admits operator-enrolled peers only. Receiving-side grants and
+direct client dispatch are implemented. Independent staging remains pending.
+[Peer enrollment runbook](peer-enrollment.md) · [Outbound A2A guide](outbound-a2a.md)
 
 ## Trust boundaries
 
@@ -56,15 +55,11 @@ they provide neither global freshness nor proof of exclusive control.
 
 ## Safe transport and migration
 
-- **Card fetching and task dispatch:** Use one reviewed outbound policy for
-  public HTTPS. Normalize and validate the requested URL, reject private,
-  loopback, link-local, and other non-public destinations, and enforce the
-  same policy on the address actually used for the connection. Preserve TLS
-  SNI and hostname verification for the original approved hostname. Deny unsafe
-  redirects by disabling redirects, ignore ambient proxy configuration by
-  default, and enforce independent network egress restrictions. Select a
-  vetted transport or configured egress gateway during Milestone 3. Checking
-  DNS before a separate unconstrained HTTP connection is insufficient.
+- **Card fetching and task dispatch:** Both paths use PycURL/libcurl for
+  public HTTPS. Validate all DNS answers, then pin the connection to a vetted
+  numeric address with `CONNECT_TO`. Preserve TLS SNI and hostname verification
+  for the original hostname. Disable redirects and ambient proxies. Enforce
+  independent network egress restrictions in deployment.
 - **Credential routing:** Pin a peer grant on the client to the approved
   canonical task URL, recipient root, and transport. Recheck current endpoint
   authorization before each dispatch. Keep peer tokens in the client’s

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 from agent_commons.identity_crypto import verify_identity_signature
 
+SOVEREIGN_ENDPOINT_EXTENSION_URI = "urn:agent-commons:extension:sovereign-identity:v2"
 ENDPOINT_AUTHORIZATION_DOMAIN = "agent-commons:sovereign-endpoint:v1"
 MAX_VALIDITY_SECONDS = 7 * 24 * 60 * 60
 FUTURE_TOLERANCE_SECONDS = 5 * 60
