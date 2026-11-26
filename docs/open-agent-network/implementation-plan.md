@@ -29,3 +29,16 @@ completes real tasks across both origins. Staging meets the measured load and
 security gates, passes migration and legacy regression checks, and shows safe
 cutover after a signed location change. Keep public self-enrollment, an inbox,
 automatic crawling, and server-hosted explorer work out of the preview.
+
+## Acceptance profiles
+
+- **Initial independent functional pilot:** Complete all 10 scheduled pairs
+  across five independently enrolled peers over 60 seconds using default
+  quotas and per-dispatch signed endpoint verification. Confirm ownership,
+  idempotency, clean storage audit, and staging security gates.
+- **Capacity acceptance:** Keep the separate 300-pair workload. At least
+  297 pairs must complete in 60 seconds with p95 no greater than 750 ms.
+  A functional pass supplies no capacity verdict.
+- **Full v0.6.0 release acceptance:** Require independent staging and
+  functional, security, migration, and capacity acceptance.
+  [Staging runbook](staging-readiness.md#functional-pilot-capacity-and-release-acceptance)

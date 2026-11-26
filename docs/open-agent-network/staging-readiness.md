@@ -145,6 +145,46 @@ old destination binding rejection and a successful post-migration pair.
 Retire B's old Card after collecting the check. Migration verifies
 continuity. Source retirement remains an operator action.
 
+## Functional pilot, capacity, and release acceptance
+
+The functional and capacity profiles have distinct acceptance criteria.
+Full v0.6.0 release acceptance requires the independent
+deployment, functional and security checks, and the original capacity
+result of at least 297 of 300 completed pairs at no more than 750 ms p95.
+
+For the pilot, enroll five distinct caller roots and grants for one
+recipient through the normal operator workflow. Use an isolated staging
+window. Confirm no competing traffic on the caller homes and receiver
+for at least 60 seconds before the run and through the end of its
+post-run checks. Apply the documented default quotas to every worker.
+The signed locations and grants need at least 151 seconds of remaining
+validity at preflight. The harness records its five setup refreshes
+separately and waits 61 seconds after setup before starting measurement.
+Record earlier enrollment and operator refreshes separately in the run
+notes and keep them outside the quiet window. The flag attests to this operational boundary.
+
+```bash
+python -m scripts.staging.validate functional --confirm-quiet   --manifest five-peers.json > functional-report.json
+```
+
+The harness interleaves one pair every six seconds across five peers
+for a 60-second window. It requires 10 of 10 complete, exactly two per
+peer, a successful signed proof check on each of the 20 SDK calls,
+completion within the window, each successful call within 750 ms, zero
+429s at either source, and zero missed schedules. It verifies distinct
+task IDs, replays one message per caller to check idempotency, and verifies
+one cross-owner read denial per caller. Those ten post-run calls and their
+Card refreshes are outside the latency and quota measurements. Collect the
+receiver's read-only storage audit separately to verify the database
+contains no duplicate ownership/message keys and stays within retention.
+
+Functional and capacity reports have separate modes and verdicts.
+Each records successful and all-attempt p95, Card-refresh and receiver
+dispatch p95, resolver and receiver 429 counts, completed pairs in
+manifest order, and missed schedules. Null timing means no sample.
+A failed functional setup leaves workload-only checks unexecuted.
+The capacity workload retains its original scheduling and pass threshold.
+
 ## Performance and failure drills
 
 ```bash

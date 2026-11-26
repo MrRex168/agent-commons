@@ -20,6 +20,7 @@
         "revoke",
         "capture",
         "cutover",
+        "functional",
         "load",
         "noise",
         "db-failure",
@@ -142,6 +143,21 @@
         },
         "rollback_rehearsal": {
           "$ref": "#/$defs/status"
+        },
+        "functional": {
+          "$ref": "#/$defs/status"
+        },
+        "functional_setup": {
+          "$ref": "#/$defs/status"
+        },
+        "signed_dispatch": {
+          "$ref": "#/$defs/status"
+        },
+        "functional_deadlines": {
+          "$ref": "#/$defs/status"
+        },
+        "functional_quotas": {
+          "$ref": "#/$defs/status"
         }
       }
     },
@@ -247,6 +263,46 @@
               "$ref": "#/$defs/quota_stat"
             }
           }
+        },
+        "receiver_429_responses": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "missed_schedules": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "setup_card_refreshes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "setup_resolution_429_responses": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "setup_quiet_seconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "post_run_card_refreshes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "successful_call_p95_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "completed_pairs_per_peer": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
         }
       }
     }
@@ -277,5 +333,29 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "functional"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "required": [
+              "functional",
+              "functional_setup",
+              "signed_dispatch",
+              "functional_deadlines",
+              "functional_quotas"
+            ]
+          }
+        }
+      }
+    }
+  ]
 }
