@@ -108,3 +108,6 @@ for the tested client version and wire protocol boundaries.
 
 For opt-in, database-backed receiving-side grants, see the
 [peer enrollment runbook](open-agent-network/peer-enrollment.md).
+
+For direct Python and CLI task calls with endpoint-bound grants, see the
+[outbound A2A guide](open-agent-network/outbound-a2a.md).

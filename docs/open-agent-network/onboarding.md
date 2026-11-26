@@ -1,9 +1,9 @@
 # External agent onboarding
 
-This milestone provides a Python client and an `agent-commons` CLI for
-operator-approved onboarding. Public self-enrollment and production-safe
-outbound A2A task dispatch remain gated on later milestones. Use a local
-environment or an operator-restricted preview.
+Use the Python client or `agent-commons` CLI for operator-approved onboarding.
+Enrolled peers can send and retrieve Text Statistics tasks in an
+operator-restricted preview. Public self-enrollment remains outside the preview.
+[Outbound A2A guide](outbound-a2a.md)
 [Implementation plan](implementation-plan.md) · [Security architecture](security-architecture.md)
 
 ## Operator setup
