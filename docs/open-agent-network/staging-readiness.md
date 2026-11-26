@@ -21,7 +21,7 @@ ACL, mTLS where compatible with both operators' clients, or an equivalent
 restricted ingress gateway to keep unauthenticated traffic off the app. Use
 gateway/WAF body parsing for malformed JSON rejection before upstream work.
 For a multi-proxy deployment, use one upstream policy enforcement point or
-shared rate counters, not separate copies of local Nginx zones. Configure
+shared rate counters. Independent Nginx zones enforce only local limits. Configure
 header/read deadlines and a hard end-to-end request deadline at the outer
 gateway, since Nginx per-read timers reset as bytes arrive. Classify metrics
 by fixed route name. Avoid logging enrollment paths containing approval IDs.
@@ -136,7 +136,8 @@ locally and stores the new account key privately. Publish on C with a
 higher location sequence. Resolve C's Card from A using the same observer.
 Resolve A from C, approve and enroll a fresh grant for C. Preserve B's
 signed public Card briefly, while B disables old task traffic or revokes
-the old grants. Then run
+the old grants. Keep the original local grant file and run before its recorded
+expiry. Then run
 `python -m scripts.staging.validate cutover --manifest after.json`, using
 the original observer config with the new grant. It checks the signed
 location, persisted follow and reference, stale source Card rejection,

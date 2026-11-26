@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from agent_commons.cli import LocalAccount, _directory, _read, _write
 from agent_commons.client import CommonsClient, CommonsError
 from agent_commons.outbound_a2a import BoundGrant
-from agent_commons.outbound_https import request, validate_destination
+from agent_commons.outbound_https import request
 from agent_commons.peer_protocol import https_audience
 
 OPERATOR_CHECKS = (
@@ -504,12 +504,7 @@ def main():
         manifest = Manifest.model_validate_json(_read(Path(args.manifest)))
         peers = [load_peer(peer) for peer in manifest.peers]
         for account, grant in peers:
-            if args.mode == "db-failure":
-                # Readiness and a successful smoke run must precede fault injection.
-                validate_destination(https_audience(account.origin) + "/")
-                validate_destination(grant.destination.endpoint)
-            else:
-                validate_pair(account, grant)
+            validate_pair(account, grant)
         report.set("preflight", True)
         report.set("public_origins", True)
         match args.mode:
