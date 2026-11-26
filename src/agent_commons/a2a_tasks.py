@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import DBAPIError
@@ -22,6 +23,7 @@ from agent_commons.config import A2ATaskPeer, settings
 from agent_commons.db import SessionLocal
 from agent_commons.models import Agent
 from agent_commons.peer_enrollment import authenticate_grant, require_audience
+from agent_commons.preview_limits import consume, consume_grant
 
 router = APIRouter(tags=["a2a-tasks"])
 MAX_REQUEST_BYTES = 16_384
@@ -30,6 +32,7 @@ MAX_RETAINED_TASKS = 1_024
 TASK_RETENTION = timedelta(hours=24)
 BODY_TIMEOUT_SECONDS = 3
 REQUEST_SLOTS = BoundedSemaphore(8)
+PREVIEW_AUTH_SLOTS = BoundedSemaphore(8)
 TOKEN_PATTERN = re.compile(r"a2a_[A-Za-z0-9_-]{43}")
 
 
@@ -253,13 +256,34 @@ def _dispatch(peer: A2ATaskPeer, rpc: RPCRequest) -> dict:
         raise
 
 
-@router.post("/a2a")
-async def run_a2a_task(request: Request) -> dict:
+async def _preview_peer(request: Request) -> A2ATaskPeer:
+    if not PREVIEW_AUTH_SLOTS.acquire(blocking=False):
+        raise HTTPException(503, "A2A admission is busy")
+    try:
+        peer = await _authenticate(request)
+        if peer.grant_id is None:
+            raise HTTPException(503, "Preview admission is unavailable")
+        await run_in_threadpool(
+            consume_grant,
+            peer.grant_id,
+            settings.preview_task_rate_per_grant,
+            settings.preview_task_burst_per_grant,
+        )
+        return peer
+    finally:
+        PREVIEW_AUTH_SLOTS.release()
+
+
+@router.post("/a2a", response_model=None)
+async def run_a2a_task(request: Request) -> dict | JSONResponse:
+    preview = settings.preview_limits
+    peer = await _preview_peer(request) if preview else None
     if not REQUEST_SLOTS.acquire(blocking=False):
         raise HTTPException(503, "A2A runtime is busy")
     request_id = None
     try:
-        peer = await _authenticate(request)
+        if peer is None:
+            peer = await _authenticate(request)
         raw = await _read_json(request)
         try:
             rpc = RPCRequest.model_validate(raw)
@@ -268,6 +292,21 @@ async def run_a2a_task(request: Request) -> dict:
         except (ValidationError, UnicodeEncodeError) as exc:
             raise RPCError(-32600, "Invalid request") from exc
         request_id = rpc.id
+        if preview and rpc.method in peer.scopes:
+            try:
+                await run_in_threadpool(consume, "tasks", settings.preview_tasks_per_second, 1)
+            except HTTPException as exc:
+                if exc.status_code != 429:
+                    raise
+                return JSONResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {"code": -32012, "message": "Preview request rate exceeded"},
+                    },
+                    status_code=429,
+                    headers=exc.headers,
+                )
         result = await run_in_threadpool(_dispatch, peer, rpc)
         return {"jsonrpc": "2.0", "id": request_id, "result": result}
     except RPCError as exc:

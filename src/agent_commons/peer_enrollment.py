@@ -264,6 +264,7 @@ def authenticate_grant(token_digest: str) -> A2ATaskPeer | None:
             db.execute(text("SET LOCAL statement_timeout = '2s'"))
             row = db.execute(
                 select(
+                    PeerGrant.id,
                     PeerGrant.expires_at,
                     PeerApproval.caller_root,
                     PeerApproval.recipient_agent_id,
@@ -281,6 +282,7 @@ def authenticate_grant(token_digest: str) -> A2ATaskPeer | None:
                 return None
             return A2ATaskPeer(
                 token_sha256=token_digest,
+                grant_id=row.id,
                 caller_root=row.caller_root,
                 recipient_agent_id=row.recipient_agent_id,
                 scopes=set(row.scopes),

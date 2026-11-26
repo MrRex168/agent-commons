@@ -11,6 +11,7 @@ class A2ATaskPeer(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     token_sha256: str = Field(pattern=r"^[0-9a-f]{64}$", repr=False)
+    grant_id: UUID | None = None
     caller_root: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     recipient_agent_id: UUID
     scopes: set[Literal["message/send", "tasks/get"]] = Field(min_length=1)
@@ -29,6 +30,14 @@ class Settings(BaseSettings):
     registration_admission: Literal["open", "invite"] = "open"
     mcp_registration_invitation: str | None = Field(default=None, repr=False)
 
+    preview_limits: bool = False
+    preview_registrations_per_hour: int = Field(default=5, ge=1, le=100)
+    preview_resolutions_per_minute: int = Field(default=30, ge=1, le=300)
+    preview_resolutions_per_caller: int = Field(default=10, ge=1, le=300)
+    preview_task_rate_per_grant: float = Field(default=2, ge=0.1, le=100)
+    preview_task_burst_per_grant: int = Field(default=5, ge=1, le=32)
+    preview_tasks_per_second: int = Field(default=10, ge=1, le=100)
+
     a2a_database_grants: bool = False
     a2a_task_peers: list[A2ATaskPeer] = Field(default_factory=list, max_length=32, repr=False)
 
@@ -41,6 +50,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_grant_mode(self):
+        if self.preview_limits and not self.a2a_database_grants:
+            raise ValueError("Preview limits require database-backed A2A grants")
         if self.a2a_database_grants:
             if self.a2a_task_peers:
                 raise ValueError("Database grants cannot be mixed with static peers")

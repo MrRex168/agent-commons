@@ -20,6 +20,7 @@ from agent_commons.config import Settings, settings
 from agent_commons.db import Base, SessionLocal, engine
 from agent_commons.main import app
 from agent_commons.models import Agent
+from agent_commons.preview_limits import PreviewQuota
 from agent_commons.registration import RegistrationInvitation, issue_invitation
 from agent_commons.security import REGISTRATION_INVITATION_HEADER, hash_api_key
 
@@ -345,3 +346,64 @@ def test_sdk_refuses_to_sign_a_challenge_for_a_different_audience(server):
         with pytest.raises(CommonsError, match="expected audience"):
             client.bind_identity(Ed25519PrivateKey.generate())
     assert "/api/v1/agents/me/identity/verify" not in requests
+
+
+def test_preview_registration_rate_is_shared_by_rest_aliases_and_mcp(server, monkeypatch):
+    monkeypatch.setattr(settings, "preview_limits", True)
+    monkeypatch.setattr(settings, "preview_registrations_per_hour", 2)
+    first = server.post("/agents/register", json={"name": "first"}, headers=headers(invite()))
+    second = server.post(
+        "/api/v1/agents/register", json={"name": "second"}, headers=headers(invite())
+    )
+    assert first.status_code == second.status_code == 201
+    token = invite()
+    capped = server.post("/agents/register", json={"name": "third"}, headers=headers(token))
+    assert capped.status_code == 429
+    assert 1 <= int(capped.headers["Retry-After"]) <= 3600
+
+    remote = mcp_server.CommonsAPI(ORIGIN, None, transport=transport_for(server))
+    monkeypatch.setattr(mcp_server, "api", remote)
+    monkeypatch.setattr(settings, "mcp_registration_invitation", token)
+    with pytest.raises(RuntimeError, match="HTTP 429") as error:
+        asyncio.run(mcp_server.register_agent("third"))
+    assert token not in str(error.value)
+    with SessionLocal.begin() as db:
+        assert db.get(RegistrationInvitation, hash_api_key(token)).consumed_at is None
+        db.get(PreviewQuota, "registration").timestamps = [datetime.now(UTC) - timedelta(hours=2)]
+    assert (
+        server.post("/agents/register", json={"name": "third"}, headers=headers(token)).status_code
+        == 201
+    )
+
+
+def test_invalid_invitation_attempts_are_throttled(server, monkeypatch, caplog):
+    monkeypatch.setattr(settings, "preview_limits", True)
+    token = "aci_" + "x" * 43
+    for i in range(16):
+        path = "/agents/register" if i % 2 else "/api/v1/agents/register"
+        response = server.post(path, headers=headers(token), json={"name": "uninvited"})
+        assert response.status_code == (403 if i < 15 else 429)
+        assert token not in response.text
+    assert token not in caplog.text
+
+
+def test_preview_resolution_and_refresh_share_limits(server, monkeypatch):
+    response = server.post("/agents/register", json={"name": "caller"}, headers=headers(invite()))
+    auth = {"Authorization": "Bearer " + response.json()["api_key"]}
+    monkeypatch.setattr(settings, "preview_limits", True)
+    monkeypatch.setattr(settings, "preview_resolutions_per_minute", 1)
+
+    def reject_card(_url):
+        raise ValueError("Invalid remote Card")
+
+    monkeypatch.setattr(remote_resolution, "_fetch_agent_card", reject_card)
+    base = "/api/v1/agents/remote"
+    assert (
+        server.post(
+            base + "/resolve", json={"agent_card_url": ATLAS_CARD}, headers=auth
+        ).status_code
+        == 422
+    )
+    capped = server.post(base + "/00000000-0000-0000-0000-000000000000/refresh", headers=auth)
+    assert capped.status_code == 429
+    assert "Retry-After" in capped.headers
