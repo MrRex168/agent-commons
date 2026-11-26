@@ -8,6 +8,8 @@ from uuid import UUID
 import httpx
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, SecretStr
 
+from agent_commons.collaboration import SkillScopes
+
 Method = Literal["message/send", "tasks/get"]
 Root = Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
 Scopes = Annotated[list[Method], Field(min_length=1, max_length=2)]
@@ -60,3 +62,19 @@ class IssuedGrant(BaseModel):
     scopes: Scopes
     expires_at: datetime
     token: SecretStr
+
+
+class SkillEnrollmentChallenge(EnrollmentChallenge):
+    version: Literal[2]
+    skills: SkillScopes
+
+    def signing_payload(self) -> str:
+        canonical = json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+        return "agent-commons/peer-enrollment/v2\n" + canonical
+
+
+class SkillIssuedGrant(IssuedGrant):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal[2]
+    skills: SkillScopes

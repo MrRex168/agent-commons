@@ -14,6 +14,7 @@ from agent_commons.a2a_identity import (
     build_sovereign_endpoint_params,
     build_sovereign_identity_params,
 )
+from agent_commons.collaboration import EXTENSION_PREFIX, EXTENSION_URI, advertised_skill
 from agent_commons.config import settings
 from agent_commons.db import get_db
 from agent_commons.models import Agent
@@ -165,12 +166,11 @@ def _extensions(
         ) from exc
 
     if any(
-        item.uri.startswith(SOVEREIGN_EXTENSION_PREFIX)
-        for item in extensions
+        item.uri.startswith((SOVEREIGN_EXTENSION_PREFIX, EXTENSION_PREFIX)) for item in extensions
     ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Remove the manually configured Agent Commons identity extension",
+            detail="Remove the manually configured reserved Agent Commons extension",
         )
     if config.get("publishSovereignIdentity") is True:
         params = build_sovereign_identity_params(agent, db)
@@ -186,6 +186,16 @@ def _extensions(
                 description="Portable Agent Commons sovereign identity proof.",
                 required=False,
                 params=params,
+            )
+        )
+    keys = settings.collaboration_skills.get(agent.id, ())
+    if keys and any(item.uri == SOVEREIGN_ENDPOINT_EXTENSION_URI for item in extensions):
+        extensions.append(
+            A2AAgentExtension(
+                uri=EXTENSION_URI,
+                description="Advertised typed collaboration contracts. Execution unavailable.",
+                required=False,
+                params={"version": 1, "skills": [advertised_skill(key) for key in keys]},
             )
         )
     return extensions or None
@@ -235,9 +245,7 @@ def build_agent_card(agent: Agent, db: Session) -> A2AAgentCard:
                 detail="A2A metadata 'additionalInterfaces' must be a list",
             )
         try:
-            additional_interfaces = [
-                A2AAgentInterface.model_validate(item) for item in interfaces
-            ]
+            additional_interfaces = [A2AAgentInterface.model_validate(item) for item in interfaces]
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,

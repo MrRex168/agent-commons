@@ -4,6 +4,7 @@ from uuid import UUID
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from agent_commons.collaboration import SkillScopes, registry
 from agent_commons.peer_protocol import https_audience
 
 
@@ -12,6 +13,7 @@ class A2ATaskPeer(BaseModel):
 
     token_sha256: str = Field(pattern=r"^[0-9a-f]{64}$", repr=False)
     grant_id: UUID | None = None
+    skill_scopes: SkillScopes | None = None
     caller_root: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     recipient_agent_id: UUID
     scopes: set[Literal["message/send", "tasks/get"]] = Field(min_length=1)
@@ -38,6 +40,8 @@ class Settings(BaseSettings):
     preview_task_burst_per_grant: int = Field(default=5, ge=1, le=32)
     preview_tasks_per_second: int = Field(default=10, ge=1, le=100)
 
+    collaboration_skills: dict[UUID, SkillScopes] = Field(default_factory=dict)
+
     a2a_database_grants: bool = False
     a2a_task_peers: list[A2ATaskPeer] = Field(default_factory=list, max_length=32, repr=False)
 
@@ -50,6 +54,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_grant_mode(self):
+        for scopes in self.collaboration_skills.values():
+            if len(set(scopes)) != len(scopes):
+                raise ValueError("Duplicate configured collaboration skill")
+            for scope in scopes:
+                registry.get(scope)
         if self.preview_limits and not self.a2a_database_grants:
             raise ValueError("Preview limits require database-backed A2A grants")
         if self.a2a_database_grants:

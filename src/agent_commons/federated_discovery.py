@@ -13,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, aliased
 
 from agent_commons.auth import get_current_agent
+from agent_commons.collaboration import EXTENSION_URI, SKILL_PATTERN
 from agent_commons.db import get_db
 from agent_commons.models import Agent
 from agent_commons.remote_models import EndpointStatus, RemoteAgentReference
@@ -142,6 +143,7 @@ def _profile(reference: RemoteAgentReference, now: datetime) -> FederatedAgentPr
 def discover_remote_agents(
     q: str = Query(default="", max_length=100),
     skill: str | None = Query(default=None, min_length=2, max_length=100),
+    skill_exact: str | None = Query(default=None, pattern=SKILL_PATTERN, max_length=80),
     verified_only: bool = Query(default=False),
     limit: int = Query(default=20, ge=1, le=100),
     cursor: str | None = Query(default=None, max_length=1800),
@@ -149,6 +151,8 @@ def discover_remote_agents(
     db: Session = Depends(get_db),
 ) -> FederatedDiscoveryResults:
     """Search a bounded, keyset-ordered segment of resolved remote agents."""
+    if skill is not None and skill_exact is not None:
+        raise HTTPException(422, "Choose skill or skill_exact")
     model = RemoteAgentReference
     page_size = min(limit, PAGE_SIZE)
     keys = select(model.name, model.id)
@@ -159,7 +163,7 @@ def discover_remote_agents(
         db.execute(text("SET LOCAL statement_timeout = '750ms'"))
         candidates = db.execute(keys.order_by(model.name, model.id).limit(SCAN_SIZE + 1)).all()
         if not candidates:
-            return FederatedDiscoveryResults(query=q, skill=skill, agents=[])
+            return FederatedDiscoveryResults(query=q, skill=skill_exact or skill, agents=[])
         # Materialize at most SCAN_SIZE rows before touching large JSON or text values.
         # Select the original rows by primary key in SQL, including all visibility filters.
         ids = [row.id for row in candidates[:SCAN_SIZE]]
@@ -185,6 +189,21 @@ def discover_remote_agents(
             )
         if skill is not None:
             query = query.where(_skill_filter(candidate, skill))
+        if skill_exact is not None:
+            identifier, version = skill_exact.split("@")
+            query = query.where(
+                candidate.card_snapshot["capabilities"]["extensions"].contains(
+                    [
+                        {
+                            "uri": EXTENSION_URI,
+                            "params": {
+                                "version": 1,
+                                "skills": [{"id": identifier, "schemaVersion": int(version)}],
+                            },
+                        }
+                    ]
+                )
+            )
         matches = db.scalars(
             query.order_by(candidate.name, candidate.id).limit(page_size + 1)
         ).all()
@@ -199,4 +218,6 @@ def discover_remote_agents(
     elif len(candidates) > SCAN_SIZE:
         last = candidates[SCAN_SIZE - 1]
         next_cursor = _cursor(last.name, last.id)
-    return FederatedDiscoveryResults(query=q, skill=skill, agents=profiles, next_cursor=next_cursor)
+    return FederatedDiscoveryResults(
+        query=q, skill=skill_exact or skill, agents=profiles, next_cursor=next_cursor
+    )

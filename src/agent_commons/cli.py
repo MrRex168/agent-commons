@@ -184,6 +184,7 @@ def _operator_peer(args) -> None:
                 recipient=args.recipient,
                 scopes=args.scope,
                 lifetime_hours=args.hours,
+                skills=args.skill,
             )
         else:
             approval_id = change_grant(db, args.grant, rotate=args.command == "peer-rotate")
@@ -195,6 +196,7 @@ def _operator_peer(args) -> None:
 
 def _enroll_peer(args, directory: int, key: Ed25519PrivateKey, account: LocalAccount) -> None:
     bound_options = (args.reference, args.peer_root, args.peer_controller, args.endpoint)
+    options = {"skills": args.skill} if args.skill is not None else {}
     if any(bound_options):
         if not all(bound_options):
             raise CommonsError("Provide the reference, peer root, controller and endpoint together")
@@ -214,11 +216,14 @@ def _enroll_peer(args, directory: int, key: Ed25519PrivateKey, account: LocalAcc
                 approval_id=args.approval,
                 caller_root=args.caller_root,
                 scopes=args.scope,
+                **options,
             )
         grant = bound.grant
         raw = bound.model_dump(mode="json")
         raw["grant"]["token"] = grant.token.get_secret_value()
     else:
+        if options:
+            raise CommonsError("Typed enrollment requires an approved destination binding")
         with CommonsClient(args.url) as client:
             grant = client.enroll_peer(
                 key,
@@ -226,6 +231,7 @@ def _enroll_peer(args, directory: int, key: Ed25519PrivateKey, account: LocalAcc
                 caller_root=args.caller_root,
                 recipient_agent_id=args.recipient,
                 scopes=args.scope,
+                **options,
             )
         raw = grant.model_dump(mode="json")
         raw["token"] = grant.token.get_secret_value()
@@ -297,6 +303,9 @@ def _parser() -> argparse.ArgumentParser:
     enroll.add_argument("--peer-controller")
     enroll.add_argument("--endpoint")
     for command in (approve, enroll):
+        command.add_argument(
+            "--skill", action="append", help="Exact typed skill such as analysis.summary@1"
+        )
         command.add_argument("--caller-root", required=True)
         command.add_argument("--recipient", required=True, type=UUID)
         command.add_argument(
