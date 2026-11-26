@@ -211,6 +211,7 @@ def test_functional_report_checks_ownership_and_separates_setup(workload_fixture
     assert checked["checks"]["functional"] == "pass"
     assert checked["checks"]["load"] == "not_executed"
     assert checked["checks"]["ownership"] == "pass"
+    assert checked["checks"]["idempotency"] == "pass"
     assert checked["metrics"]["completed_pairs_per_peer"] == [2] * 5
     assert checked["metrics"]["setup_card_refreshes"] == 5
     assert checked["metrics"]["post_run_card_refreshes"] == 10

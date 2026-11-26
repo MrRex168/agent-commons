@@ -490,7 +490,8 @@ def _functional_setup(report, peers):
 
 
 def _functional_ownership(report, peers, results, ids):
-    same = len(set(ids)) == len(ids)
+    unique = len(set(ids)) == len(ids)
+    same = True
     ownership = True
     checks = report.data["metrics"]
     checks["post_run_card_refreshes"] = 0
@@ -509,9 +510,10 @@ def _functional_ownership(report, peers, results, ids):
                 same = ownership = False
             finally:
                 checks["post_run_card_refreshes"] += len(client.refresh_ms)
-    report.set("no_duplicate_tasks", same)
+    report.set("idempotency", same)
+    report.set("no_duplicate_tasks", unique and same)
     report.set("ownership", ownership)
-    return same and ownership
+    return unique and same and ownership
 
 
 def functional(report, peers):
