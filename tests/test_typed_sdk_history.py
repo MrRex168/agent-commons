@@ -1,5 +1,8 @@
 import hashlib
 import json
+import os
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
@@ -31,6 +34,7 @@ from agent_commons.outbound_a2a import BoundGrant, DestinationApproval
 from agent_commons.peer_enrollment import change_grant
 from agent_commons.peer_protocol import SkillIssuedGrant
 from agent_commons.remote_resolution import _store_reference
+from agent_commons.typed_client_models import CollaborationPage
 
 executing = test_typed_execution.executing
 enrolled_fixture = test_typed_execution.enrolled_fixture
@@ -109,7 +113,7 @@ def arguments(grant):
 
 
 def test_typed_sdk_durable_history_replay_cancel_and_revocation(linked):
-    sdk, grant, home, api_key, _, _, _, calls = linked
+    sdk, grant, _, api_key, _, _, _, calls = linked
     assert sdk.discover_known(skill=SKILL).agents[0].root_fingerprint == grant.destination.peer_root
     assert not sdk.discover_known(skill="analysis.summary@2").agents
     params = arguments(grant)
@@ -122,8 +126,36 @@ def test_typed_sdk_durable_history_replay_cancel_and_revocation(linked):
     assert sdk.delegate(**params).id == task.id
     canceled = sdk.cancel_task(sdk.delegate(**arguments(grant)).reference, grant=grant)
     assert canceled.status == "canceled"
-    with CommonsClient(HOME, api_key=api_key, transport=transport_for(home)) as recreated:
-        records = recreated.list_collaboration_history().records
+    # A fresh process starts its own application and connection pool.
+    restarted = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import json
+import sys
+from fastapi.testclient import TestClient
+from agent_commons.main import app
+
+with TestClient(app) as home:
+    response = home.get(
+        '/api/v1/agents/collaboration/history',
+        headers={'Authorization': 'Bearer ' + sys.stdin.read()},
+    )
+    print(json.dumps(response.json()) if response.status_code == 200 else '{}')
+""",
+        ],
+        input=api_key,
+        env={
+            **os.environ,
+            "AGENT_COMMONS_DATABASE_URL": os.environ["AGENT_COMMONS_TEST_DATABASE_URL"],
+        },
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=15,
+    )
+    records = CollaborationPage.model_validate_json(restarted.stdout).records
     assert len(records) == 2
     assert records[1].task_id == task.id and records[1].status == "completed"
     assert (
@@ -234,3 +266,32 @@ def test_typed_polling_deadline_and_invalid_artifact(linked, monkeypatch):
     monkeypatch.setattr(outbound_https, "request", malformed)
     with pytest.raises(OutboundResponseError, match="invalid typed task or artifact"):
         sdk.get_task_status(task.reference, grant=grant)
+
+
+def test_history_migration_round_trip_preserves_agents():
+    from importlib import import_module
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    from agent_commons.db import engine
+
+    migration = import_module("migrations.versions.0020_collaboration_history")
+    schema = f"history_migration_{uuid4().hex}"
+    owner = uuid4()
+    with engine.connect() as db, db.begin() as transaction:
+        db.exec_driver_sql(f"CREATE SCHEMA {schema}")
+        db.exec_driver_sql(f"SET LOCAL search_path TO {schema}, pg_catalog")
+        db.exec_driver_sql("CREATE TABLE agents (id uuid PRIMARY KEY)")
+        db.exec_driver_sql("INSERT INTO agents VALUES (%s)", (owner,))
+        with Operations.context(MigrationContext.configure(db)):
+            migration.upgrade()
+            assert db.exec_driver_sql("SELECT count(*) FROM collaboration_history").scalar() == 0
+            migration.downgrade()
+            assert (
+                db.exec_driver_sql("SELECT to_regclass('collaboration_history')").scalar() is None
+            )
+            migration.upgrade()
+            assert db.exec_driver_sql("SELECT count(*) FROM collaboration_history").scalar() == 0
+        assert db.exec_driver_sql("SELECT id FROM agents").scalar() == owner
+        transaction.rollback()
