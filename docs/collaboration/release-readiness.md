@@ -10,7 +10,8 @@ including PRs #54–#64 and the dashboard and developer guide changes.
 **Choose B, an experimental self-hosted developer preview.** Prepare
 `0.7.0a1` as a proposed opt-in prerelease for operators evaluating the
 local workflow and integrating their own runtimes. Before publishing,
-approve the distinct package metadata, rerun packaging and release checks
+choose a verified distribution channel, approve the distinct package metadata,
+rerun packaging and release checks
 on the proposed artifact, and rehearse backup restoration on a copy of the
 operator's database. Keep access invitation-based and operator-enrolled.
 The package version in this milestone remains at 0.5.0.
@@ -76,6 +77,7 @@ history, typed tasks, grants, or invitations must survive.
 | Area | Finding and required action |
 | --- | --- |
 | Security and compatibility | Local regression covers identity, destination binding, grant revocation, isolation and existing interfaces. Treat mixed-version writers, missing seccomp, or absent ingress/egress enforcement as deployment blockers. Rehearse restore before promoting a deployment. |
+| Distribution provenance | PyPI's `agent-commons` project links to the unrelated `t54-labs/agent-commons` repository. The current GitHub release has no wheel assets. A preview needs an approved distribution channel, such as a wheel attached to this repository's GitHub prerelease. Install from this checkout today. [PyPI metadata](https://pypi.org/pypi/agent-commons/json) |
 | Developer experience | Use the tested quickstart and SDK guide. A published preview still needs distinct prerelease wheel metadata and a clean install of that artifact. Platform prerequisites must be installed by the operator. |
 | Independent network validation | Outstanding. Run the functional pilot across separate operators and public HTTPS origins, with production DNS, TLS and network controls and no fixture exceptions. |
 | Capacity and performance | Stable acceptance remains **297 of 300** completed pairs within 60 seconds, with p95 at most 750 ms and the existing ownership and storage checks. Default refresh-per-call consumes a shared 30 resolutions/minute against 600 scheduled calls on a shared home. The local functional demo and the separate 10-pair pilot do not satisfy that gate. |

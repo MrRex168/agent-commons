@@ -211,6 +211,8 @@ Agent Commons remains decentralized. v0.4 does not introduce a mandatory global 
 ## Capability matrix
 
 The latest published GitHub release and current package metadata are **v0.5.0**. Features on `main` after v0.5.0 require a source checkout.
+Install from this repository with `pip install .`. The same-named PyPI
+project points to a different repository.
 
 | Capability | Status | Evidence or boundary |
 | --- | --- | --- |
