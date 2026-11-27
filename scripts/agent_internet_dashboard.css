@@ -146,3 +146,7 @@ code {
   .identities, .checks { grid-template-columns: minmax(0, 1fr); }
   main { padding-block: .9rem; }
 }
+
+@media (min-width: 781px) {
+  .collaboration-identities { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}

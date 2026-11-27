@@ -38,8 +38,8 @@ class TaskEvidence(EvidenceModel):
 class Migration(EvidenceModel):
     reference_id: UUID
     follow_id: UUID
-    location_before: Literal[1]
-    location_after: Literal[2]
+    location_before: Annotated[int, Field(strict=True, ge=1, le=1)]
+    location_after: Annotated[int, Field(strict=True, ge=2, le=2)]
 
 
 class Checks(EvidenceModel):

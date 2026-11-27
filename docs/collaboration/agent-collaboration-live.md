@@ -31,8 +31,12 @@ docker run --rm -d --name ac-collaboration-db \
 export AGENT_COMMONS_DEMO_DATABASE_URL=postgresql://demo_admin:local_demo_only@127.0.0.1:55432/postgres
 docker exec ac-collaboration-db pg_isready -U demo_admin
 python -m scripts.agent_collaboration_live --evidence /tmp/agent-collaboration-live.json
-docker stop ac-collaboration-db
+python -m scripts.agent_internet_dashboard --evidence /tmp/agent-collaboration-live.json
 ```
+
+Open `http://127.0.0.1:8080/`. Review the 19 checks, the signed 1 → 2 location
+change and the three completed tasks. Stop the dashboard with Ctrl+C and
+run `docker stop ac-collaboration-db`.
 
 Wait for PostgreSQL to report that it accepts connections before starting.
 Use a new output filename each run. The runner provisions and checks four
@@ -55,9 +59,10 @@ The versioned report contains synthetic names, sovereign fingerprints,
 skill scopes, display-only execution origins, task IDs, terminal states,
 artifact digests, measured elapsed time, and check outcomes. A failed CLI
 run emits a minimal failure record and exits with a nonzero status. It omits
-credentials, endpoint URLs, task bodies, and raw artifacts. The existing
-v0.5 dashboard keeps its own evidence schema. This scenario publishes JSON
-for later dashboard integration.
+credentials, endpoint URLs, task bodies, and raw artifacts. The dashboard supports this report and the
+v0.5 evidence format. It loads only the operator-selected file and does not
+connect to an agent or database. Runtime measures one local fixture run,
+including temporary database and service setup and cleanup.
 
 Set `AGENT_COMMONS_TEST_DATABASE_URL` to a separate disposable PostgreSQL
 database ending in `_test` and keep the demo admin URL above.
