@@ -20,9 +20,9 @@ from agent_commons.lineage import PortableIdentityLineage, verify_lineage
 from agent_commons.models import Agent
 from agent_commons.peer_models import PeerApproval, PeerGrant
 from agent_commons.peer_protocol import (
+    CollaborationMethod,
     EnrollmentChallenge,
     IssuedGrant,
-    Method,
     Redemption,
     SkillEnrollmentChallenge,
     SkillIssuedGrant,
@@ -88,13 +88,15 @@ def approve_peer(
     reference_id: UUID,
     expected_root: str,
     recipient: UUID,
-    scopes: list[Method],
+    scopes: list[CollaborationMethod],
     lifetime_hours: int = 1,
     skills: list[str] | None = None,
 ) -> UUID:
     if not settings.a2a_database_grants:
         raise ValueError("Database grant mode must be enabled")
     allowed = {"message/send", "tasks/get"}
+    if skills is not None:
+        allowed.add("tasks/cancel")
     if not scopes or not set(scopes) <= allowed or not 1 <= lifetime_hours <= 24:
         raise ValueError("Specify allowed methods and a grant lifetime of 1–24 hours")
     approval = db.scalar(

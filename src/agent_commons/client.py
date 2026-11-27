@@ -24,6 +24,7 @@ from agent_commons.endpoint_authorization import (
 from agent_commons.identity_crypto import ED25519_MULTICODEC_PREFIX, identity_fingerprint
 from agent_commons.outbound_a2a import BoundGrant, DestinationApproval, TaskStatistics, statistics
 from agent_commons.peer_protocol import (
+    CollaborationMethod,
     EnrollmentChallenge,
     IssuedGrant,
     Method,
@@ -333,14 +334,17 @@ class CommonsClient:
         approval_id: UUID,
         caller_root: str,
         recipient_agent_id: UUID,
-        scopes: list[Method],
+        scopes: list[CollaborationMethod],
         audience: str,
         exchange: Callable[[str, str, dict], dict],
         skills: list[str] | None = None,
     ) -> IssuedGrant:
         path = f"peers/{UUID(str(approval_id))}"
         fields = (audience, caller_root, recipient_agent_id, sorted(set(scopes)))
-        if not scopes or not set(scopes) <= {"message/send", "tasks/get"}:
+        allowed = {"message/send", "tasks/get"}
+        if skills is not None:
+            allowed.add("tasks/cancel")
+        if not scopes or not set(scopes) <= allowed:
             raise CommonsError("Specify the expected task method scopes")
         if skills is not None:
             try:
@@ -452,7 +456,7 @@ class CommonsClient:
         destination: DestinationApproval,
         approval_id: UUID,
         caller_root: str,
-        scopes: list[Method],
+        scopes: list[CollaborationMethod],
         skills: list[str] | None = None,
     ) -> BoundGrant:
         """Verify a caller-approved reference and redeem a fresh, endpoint-bound credential."""

@@ -309,7 +309,10 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--caller-root", required=True)
         command.add_argument("--recipient", required=True, type=UUID)
         command.add_argument(
-            "--scope", required=True, action="append", choices=["message/send", "tasks/get"]
+            "--scope",
+            required=True,
+            action="append",
+            choices=["message/send", "tasks/get", "tasks/cancel"],
         )
     for name in ("peer-rotate", "peer-revoke"):
         command = commands.add_parser(name)

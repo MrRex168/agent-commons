@@ -22,7 +22,7 @@ from agent_commons.a2a_task_models import A2ATask
 from agent_commons.config import A2ATaskPeer, settings
 from agent_commons.db import SessionLocal
 from agent_commons.models import Agent
-from agent_commons.peer_enrollment import authenticate_grant, require_audience
+from agent_commons.peer_enrollment import _authenticate_grant, authenticate_grant, require_audience
 from agent_commons.preview_limits import consume, consume_grant
 
 router = APIRouter(tags=["a2a-tasks"])
@@ -195,7 +195,7 @@ def _send_task(peer: A2ATaskPeer, params: SendParams) -> dict:
             )
         )
         if existing:
-            if existing.request_digest != digest:
+            if existing.skill is not None or existing.request_digest != digest:
                 raise RPCError(-32010, "messageId was used for different task content")
             return existing.result
         if db.scalar(select(func.count()).select_from(A2ATask)) >= MAX_RETAINED_TASKS:
@@ -229,6 +229,7 @@ def _get_task(peer: A2ATaskPeer, params: GetParams) -> dict:
         result = db.scalar(
             select(A2ATask.result).where(
                 A2ATask.id == task_id,
+                A2ATask.skill.is_(None),
                 A2ATask.caller_root == peer.caller_root,
                 A2ATask.recipient_agent_id == peer.recipient_agent_id,
                 A2ATask.expires_at > now,
@@ -277,14 +278,40 @@ async def _preview_peer(request: Request) -> A2ATaskPeer:
 @router.post("/a2a", response_model=None)
 async def run_a2a_task(request: Request) -> dict | JSONResponse:
     preview = settings.preview_limits
-    peer = await _preview_peer(request) if preview else None
+    typed = False
+    if settings.collaboration_execution:
+        from agent_commons import typed_tasks
+
+        auth = request.headers.getlist("authorization")
+        scheme, _, token = auth[0].partition(" ") if len(auth) == 1 else ("", "", "")
+        typed = scheme.lower() == "bearer" and typed_tasks.TOKEN_PATTERN.fullmatch(token)
+        if typed:
+            require_audience(request)
+            if not PREVIEW_AUTH_SLOTS.acquire(blocking=False):
+                raise HTTPException(503, "A2A admission is busy")
+            try:
+                if (
+                    await run_in_threadpool(
+                        _authenticate_grant, hashlib.sha256(token.encode()).hexdigest(), typed=True
+                    )
+                    is None
+                ):
+                    raise HTTPException(401, "Invalid A2A peer credential")
+            finally:
+                PREVIEW_AUTH_SLOTS.release()
+    peer = await _preview_peer(request) if preview and not typed else None
     if not REQUEST_SLOTS.acquire(blocking=False):
         raise HTTPException(503, "A2A runtime is busy")
     request_id = None
     try:
-        if peer is None:
+        if peer is None and not typed:
             peer = await _authenticate(request)
-        raw = await _read_json(request)
+        try:
+            raw = await _read_json(request)
+        except HTTPException:
+            if typed:
+                await run_in_threadpool(typed_tasks.charge_invalid, token)
+            raise
         try:
             rpc = RPCRequest.model_validate(raw)
             if isinstance(rpc.id, str):
@@ -292,6 +319,9 @@ async def run_a2a_task(request: Request) -> dict | JSONResponse:
         except (ValidationError, UnicodeEncodeError) as exc:
             raise RPCError(-32600, "Invalid request") from exc
         request_id = rpc.id
+        if typed:
+            result = await run_in_threadpool(typed_tasks.dispatch, token, rpc)
+            return {"jsonrpc": "2.0", "id": request_id, "result": result}
         if preview and rpc.method in peer.scopes:
             try:
                 await run_in_threadpool(consume, "tasks", settings.preview_tasks_per_second, 1)
@@ -310,10 +340,24 @@ async def run_a2a_task(request: Request) -> dict | JSONResponse:
         result = await run_in_threadpool(_dispatch, peer, rpc)
         return {"jsonrpc": "2.0", "id": request_id, "result": result}
     except RPCError as exc:
+        if typed and request_id is None:
+            await run_in_threadpool(typed_tasks.charge_invalid, token)
         return {
             "jsonrpc": "2.0",
             "id": request_id,
             "error": {"code": exc.code, "message": str(exc)},
         }
+    except HTTPException as exc:
+        if not typed or exc.status_code != 429 or request_id is None:
+            raise
+        return JSONResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32012, "message": "Preview request rate exceeded"},
+            },
+            status_code=429,
+            headers=exc.headers,
+        )
     finally:
         REQUEST_SLOTS.release()

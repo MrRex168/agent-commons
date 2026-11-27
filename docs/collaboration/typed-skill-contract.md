@@ -1,9 +1,9 @@
 # Typed skill contract and authorization (Milestone 7.1)
 
-This milestone adds typed contracts, discovery, enrollment, and internal
-admission validation. Operator-configured contracts are advertised with an
-explicit `contract-only` execution policy. The A2A 0.3 endpoint continues to
-serve Text Statistics. Typed credentials and requests cannot execute there.
+Milestone 7.1 adds typed contracts, discovery, enrollment, and internal
+admission validation. Milestone 7.2 provides opt-in execution for the two
+built-in contracts. See the execution runbook for the separate worker and
+required isolation settings. [Execution runbook](typed-task-execution.md)
 
 ## Local registry and discovery
 
