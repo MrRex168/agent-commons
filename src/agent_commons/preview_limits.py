@@ -72,26 +72,33 @@ def consume(
         raise HTTPException(503, "Preview admission is unavailable") from None
 
 
-def consume_grant(grant_id: UUID, rate: float, burst: int) -> None:
+def _consume_grant(db: Session, grant_id: UUID, rate: float, burst: int) -> None:
     """Atomically advance a grant's theoretical arrival time."""
     interval = timedelta(seconds=1 / rate)
     now = func.clock_timestamp()
+    _timeouts(db)
+    admitted = db.scalar(
+        update(PeerGrant)
+        .where(
+            PeerGrant.id == grant_id,
+            PeerGrant.expires_at > now,
+            PeerGrant.revoked_at.is_(None),
+            func.coalesce(PeerGrant.rate_next_at, now)
+            <= now + literal((burst - 1) * interval, Interval()),
+        )
+        .values(rate_next_at=func.greatest(PeerGrant.rate_next_at, now) + interval)
+        .returning(PeerGrant.id)
+    )
+    if admitted is None:
+        raise quota_exceeded(interval.total_seconds())
+
+
+def consume_grant(grant_id: UUID, rate: float, burst: int, *, db: Session | None = None) -> None:
     try:
-        with SessionLocal.begin() as db:
-            _timeouts(db)
-            admitted = db.scalar(
-                update(PeerGrant)
-                .where(
-                    PeerGrant.id == grant_id,
-                    PeerGrant.expires_at > now,
-                    PeerGrant.revoked_at.is_(None),
-                    func.coalesce(PeerGrant.rate_next_at, now)
-                    <= now + literal((burst - 1) * interval, Interval()),
-                )
-                .values(rate_next_at=func.greatest(PeerGrant.rate_next_at, now) + interval)
-                .returning(PeerGrant.id)
-            )
-            if admitted is None:
-                raise quota_exceeded(interval.total_seconds())
+        if db is not None:
+            _consume_grant(db, grant_id, rate, burst)
+        else:
+            with SessionLocal.begin() as session:
+                _consume_grant(session, grant_id, rate, burst)
     except SQLAlchemyError:
         raise HTTPException(503, "Preview admission is unavailable") from None

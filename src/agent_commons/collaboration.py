@@ -16,6 +16,7 @@ SkillScopes = Annotated[list[SkillKey], Field(min_length=1, max_length=8)]
 MAX_INPUT = 8192
 MAX_OUTPUT = 8192
 MAX_REQUEST = 16384
+BUILTIN_EXECUTABLE_SKILLS = ("analysis.summary@1", "report.markdown@1")
 
 
 class ContractModel(BaseModel):
@@ -106,7 +107,7 @@ registry.register(
 )
 
 
-def advertised_skill(key: str) -> dict:
+def advertised_skill(key: str, *, execution_enabled: bool = False) -> dict:
     skill = registry.get(key)
     identifier, version = key.split("@")
     return {
@@ -118,7 +119,11 @@ def advertised_skill(key: str) -> dict:
         "inputMode": skill.input_media_type,
         "outputMode": skill.output_media_type,
         "executionPolicy": {
-            "state": "contract-only",
+            "state": (
+                "enabled"
+                if execution_enabled and key in BUILTIN_EXECUTABLE_SKILLS
+                else "contract-only"
+            ),
             "maxInputBytes": skill.max_input_bytes,
             "maxOutputBytes": skill.max_output_bytes,
             "maxExecutionSeconds": skill.max_execution_seconds,
@@ -142,7 +147,9 @@ def _unique_object(items: list[tuple[str, object]]) -> dict:
     return result
 
 
-def validate_typed_request(raw: bytes, *, now: datetime) -> tuple[TypedRequest, str]:
+def validate_typed_request(
+    raw: bytes, *, now: datetime, check_deadline: bool = True
+) -> tuple[TypedRequest, str]:
     """Validate bytes and produce the versioned digest for future admission."""
     if len(raw) > MAX_REQUEST:
         raise ValueError("Typed request exceeds the byte limit")
@@ -150,7 +157,9 @@ def validate_typed_request(raw: bytes, *, now: datetime) -> tuple[TypedRequest, 
         parsed = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
         request = TypedRequest.model_validate_json(_canonical(parsed))
         skill = registry.get(request.skill)
-        if not now < request.deadline <= now + timedelta(seconds=skill.max_execution_seconds):
+        if check_deadline and not now < request.deadline <= now + timedelta(
+            seconds=skill.max_execution_seconds
+        ):
             raise ValueError("Invalid task deadline")
         if len(_canonical(request.input)) > skill.max_input_bytes:
             raise ValueError("Typed input exceeds the byte limit")

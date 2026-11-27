@@ -193,9 +193,15 @@ def _extensions(
         extensions.append(
             A2AAgentExtension(
                 uri=EXTENSION_URI,
-                description="Advertised typed collaboration contracts. Execution unavailable.",
+                description="Advertised typed collaboration contracts.",
                 required=False,
-                params={"version": 1, "skills": [advertised_skill(key) for key in keys]},
+                params={
+                    "version": 1,
+                    "skills": [
+                        advertised_skill(key, execution_enabled=settings.collaboration_execution)
+                        for key in keys
+                    ],
+                },
             )
         )
     return extensions or None

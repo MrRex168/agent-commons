@@ -13,6 +13,8 @@ from agent_commons.collaboration import SkillScopes
 Method = Literal["message/send", "tasks/get"]
 Root = Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
 Scopes = Annotated[list[Method], Field(min_length=1, max_length=2)]
+CollaborationMethod = Literal["message/send", "tasks/get", "tasks/cancel"]
+CollaborationScopes = Annotated[list[CollaborationMethod], Field(min_length=1, max_length=3)]
 DOMAIN = "agent-commons/peer-enrollment/v1"
 
 
@@ -65,6 +67,7 @@ class IssuedGrant(BaseModel):
 
 
 class SkillEnrollmentChallenge(EnrollmentChallenge):
+    scopes: CollaborationScopes
     version: Literal[2]
     skills: SkillScopes
 
@@ -74,6 +77,7 @@ class SkillEnrollmentChallenge(EnrollmentChallenge):
 
 
 class SkillIssuedGrant(IssuedGrant):
+    scopes: CollaborationScopes
     model_config = ConfigDict(extra="forbid")
 
     version: Literal[2]

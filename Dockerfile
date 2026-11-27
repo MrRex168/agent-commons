@@ -4,6 +4,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libseccomp2 \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md alembic.ini ./
 COPY migrations ./migrations

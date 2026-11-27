@@ -5,7 +5,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validato
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from agent_commons.collaboration import SkillScopes, registry
-from agent_commons.peer_protocol import https_audience
+from agent_commons.peer_protocol import CollaborationMethod, https_audience
 
 
 class A2ATaskPeer(BaseModel):
@@ -16,8 +16,14 @@ class A2ATaskPeer(BaseModel):
     skill_scopes: SkillScopes | None = None
     caller_root: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     recipient_agent_id: UUID
-    scopes: set[Literal["message/send", "tasks/get"]] = Field(min_length=1)
+    scopes: set[CollaborationMethod] = Field(min_length=1)
     expires_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def validate_cancel_scope(self):
+        if "tasks/cancel" in self.scopes and self.skill_scopes is None:
+            raise ValueError("Cancellation requires a typed grant")
+        return self
 
 
 class Settings(BaseSettings):
@@ -40,6 +46,7 @@ class Settings(BaseSettings):
     preview_task_burst_per_grant: int = Field(default=5, ge=1, le=32)
     preview_tasks_per_second: int = Field(default=10, ge=1, le=100)
 
+    collaboration_execution: bool = False
     collaboration_skills: dict[UUID, SkillScopes] = Field(default_factory=dict)
 
     a2a_database_grants: bool = False
@@ -59,6 +66,8 @@ class Settings(BaseSettings):
                 raise ValueError("Duplicate configured collaboration skill")
             for scope in scopes:
                 registry.get(scope)
+        if self.collaboration_execution and not (self.a2a_database_grants and self.preview_limits):
+            raise ValueError("Collaboration execution requires database grants and preview quotas")
         if self.preview_limits and not self.a2a_database_grants:
             raise ValueError("Preview limits require database-backed A2A grants")
         if self.a2a_database_grants:
