@@ -1,0 +1,236 @@
+import hashlib
+import json
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
+from uuid import UUID, uuid4
+
+import pytest
+import test_typed_execution
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+from test_lineage_v2 import _keypair
+from test_onboarding import transport_for
+from test_peer_grants import AUDIENCE, call
+from test_remote_agent_resolution import _card, _proof, _root_lineage
+
+from agent_commons import collaboration_history, outbound_https, remote_resolution, typed_worker
+from agent_commons.a2a import A2AAgentExtension
+from agent_commons.client import (
+    CommonsClient,
+    EndpointVerificationError,
+    HistoryWriteError,
+    OutboundResponseError,
+    TypedTaskError,
+)
+from agent_commons.collaboration import EXTENSION_URI, advertised_skill
+from agent_commons.collaboration_history_models import CollaborationHistory
+from agent_commons.config import settings
+from agent_commons.db import SessionLocal
+from agent_commons.main import app
+from agent_commons.outbound_a2a import BoundGrant, DestinationApproval
+from agent_commons.peer_enrollment import change_grant
+from agent_commons.peer_protocol import SkillIssuedGrant
+from agent_commons.remote_resolution import _store_reference
+
+executing = test_typed_execution.executing
+enrolled_fixture = test_typed_execution.enrolled_fixture
+HOME = "https://home.example"
+CARD = AUDIENCE + "/agent-card"
+SKILL = "analysis.summary@1"
+
+
+@pytest.fixture
+def linked(executing, enrolled_fixture, monkeypatch):
+    receiver, grant_json, recipient = executing
+    caller_key = enrolled_fixture[2]
+    receiver_key, public = _keypair()
+    lineage = _root_lineage(public)
+    endpoint = AUDIENCE + "/a2a"
+    card = _card(
+        lineage, _proof(receiver_key, lineage, card_url=CARD, endpoint=endpoint), endpoint=endpoint
+    )
+    card.capabilities.extensions.append(
+        A2AAgentExtension(
+            uri=EXTENSION_URI,
+            required=False,
+            params={"version": 1, "skills": [advertised_skill(SKILL, execution_enabled=True)]},
+        )
+    )
+    with SessionLocal() as db:
+        remote_id = _store_reference(CARD, card, db).id
+    remote_cards = {CARD: card}
+    monkeypatch.setattr(remote_resolution, "_fetch_agent_card", remote_cards.__getitem__)
+    calls = []
+
+    def transfer(url, *, body, bearer, **kwargs):
+        assert url == endpoint
+        assert bearer == grant_json["token"]
+        calls.append(json.loads(body)["method"])
+        response = call(receiver, bearer, json.loads(body))
+        if response.status_code != 200:
+            raise outbound_https.UnexpectedStatus(response.status_code)
+        return response.content
+
+    monkeypatch.setattr(outbound_https, "request", transfer)
+    with TestClient(app, base_url=HOME) as home:
+        response = home.post("/api/v1/agents/register", json={"name": "caller-home"})
+        assert response.status_code == 201
+        api_key = response.json()["api_key"]
+        with CommonsClient(HOME, api_key=api_key, transport=transport_for(home)) as sdk:
+            with monkeypatch.context() as binding:
+                binding.setattr(settings, "api_url", HOME)
+                assert sdk.bind_identity(caller_key) == grant_json["caller_root"]
+            grant = SkillIssuedGrant.model_validate(grant_json)
+            bound = BoundGrant(
+                destination=DestinationApproval(
+                    reference_id=remote_id,
+                    peer_root=lineage["root_fingerprint"],
+                    controller=lineage["current_public_key_multibase"],
+                    recipient_agent_id=recipient,
+                    endpoint=endpoint,
+                ),
+                home_origin=HOME,
+                grant=grant,
+                expires_at=grant.expires_at,
+                identity_sequence=lineage["sequence"],
+                location_sequence=1,
+            )
+            yield sdk, bound, home, api_key, remote_cards, receiver_key, lineage, calls
+
+
+def arguments(grant):
+    return {
+        "grant": grant,
+        "skill": SKILL,
+        "data": {"values": [2, 3, -1]},
+        "message_id": uuid4().hex,
+        "deadline": datetime.now(UTC) + timedelta(seconds=15),
+    }
+
+
+def test_typed_sdk_durable_history_replay_cancel_and_revocation(linked):
+    sdk, grant, home, api_key, _, _, _, calls = linked
+    assert sdk.discover_known(skill=SKILL).agents[0].root_fingerprint == grant.destination.peer_root
+    assert not sdk.discover_known(skill="analysis.summary@2").agents
+    params = arguments(grant)
+    submitted = sdk.delegate(**params)
+    assert submitted.status == "submitted"
+    assert typed_worker.run_once()
+    task = sdk.wait_for_task(submitted.reference, grant=grant, timeout=3)
+    assert task.status == "completed"
+    assert task.artifact == {"count": 3, "total": 4, "minimum": -1, "maximum": 3}
+    assert sdk.delegate(**params).id == task.id
+    canceled = sdk.cancel_task(sdk.delegate(**arguments(grant)).reference, grant=grant)
+    assert canceled.status == "canceled"
+    with CommonsClient(HOME, api_key=api_key, transport=transport_for(home)) as recreated:
+        records = recreated.list_collaboration_history().records
+    assert len(records) == 2
+    assert records[1].task_id == task.id and records[1].status == "completed"
+    assert (
+        records[1].artifact_digest
+        == hashlib.sha256(
+            json.dumps(task.artifact, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
+    assert records[1].execution_origin == AUDIENCE
+    with SessionLocal.begin() as db:
+        change_grant(db, grant.grant.grant_id, rotate=False)
+    with pytest.raises(TypedTaskError) as error:
+        sdk.get_task_status(task.reference, grant=grant)
+    assert error.value.reason == "credential_unavailable"
+    assert calls[-1] == "tasks/get"
+
+
+def test_migration_stops_old_dispatch_and_preserves_history(linked):
+    sdk, grant, _, _, cards, key, lineage, calls = linked
+    old = sdk.delegate(**arguments(grant))
+    assert typed_worker.run_once()
+    assert sdk.get_task_status(old.reference, grant=grant).status == "completed"
+    earlier = sdk.list_collaboration_history().records[0]
+    destination = "https://moved.example"
+    card_url = destination + "/agent-card"
+    endpoint = destination + "/a2a"
+    cards[card_url] = _card(
+        lineage,
+        _proof(key, lineage, card_url=card_url, endpoint=endpoint, counter=2),
+        endpoint=endpoint,
+    )
+    assert sdk.resolve_peer(card_url).id == grant.destination.reference_id
+    previous_calls = list(calls)
+    with pytest.raises(EndpointVerificationError):
+        sdk.get_task_status(old.reference, grant=grant)
+    with pytest.raises(EndpointVerificationError):
+        sdk.cancel_task(old.reference, grant=grant)
+    assert calls == previous_calls
+    assert sdk.list_collaboration_history().records == [earlier]
+
+
+def test_history_pagination_privacy_retention_and_concurrent_terminal_updates(linked, monkeypatch):
+    sdk, grant, home, api_key, _, _, _, _ = linked
+    first = sdk.delegate(**arguments(grant))
+    second = sdk.delegate(**arguments(grant))
+    auth = {"Authorization": "Bearer " + api_key}
+    path = "/api/v1/agents/collaboration/history"
+    first_page = home.get(path, params={"limit": 1}, headers=auth).json()
+    cursor = first_page["next_cursor"]
+    assert first_page["records"][0]["task_id"] == str(second.id)
+    assert sdk.list_collaboration_history(cursor=UUID(cursor)).records[0].task_id == first.id
+    visitor = home.post("/api/v1/agents/register", json={"name": "visitor"}).json()["api_key"]
+    outsider = {"Authorization": "Bearer " + visitor}
+    assert home.get(path, headers=outsider).json()["records"] == []
+    assert home.get(path, headers=outsider, params={"cursor": cursor}).status_code == 404
+    observation = {
+        "reference_id": str(grant.destination.reference_id),
+        "caller_root": grant.grant.caller_root,
+        "task": first.reference.model_dump(mode="json"),
+        "status": "completed",
+        "artifact_digest": "a" * 64,
+    }
+    assert home.post(path, json=observation, headers=outsider).status_code == 403
+    with ThreadPoolExecutor(3) as pool:
+        results = list(
+            pool.map(lambda _: home.post(path, json=observation, headers=auth), range(3))
+        )
+    assert all(response.status_code == 200 for response in results)
+    assert len({response.json()["id"] for response in results}) == 1
+    home.post(
+        path, json={**observation, "status": "working", "artifact_digest": None}, headers=auth
+    )
+    assert sdk.list_collaboration_history().records[1].status == "completed"
+    monkeypatch.setattr(collaboration_history, "OWNER_CAP", 2)
+    with pytest.raises(HistoryWriteError):
+        sdk.delegate(**arguments(grant))
+    with SessionLocal.begin() as db:
+        first_row = db.scalar(
+            select(CollaborationHistory).where(CollaborationHistory.task_id == first.id)
+        )
+        first_row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    assert len(sdk.list_collaboration_history().records) == 1
+    assert sdk.delegate(**arguments(grant)).status == "submitted"
+
+
+def test_typed_polling_deadline_and_invalid_artifact(linked, monkeypatch):
+    sdk, grant, _, _, _, _, _, _ = linked
+    task = sdk.delegate(**arguments(grant))
+    with pytest.raises(TypedTaskError) as error:
+        sdk.wait_for_task(task.reference, grant=grant, timeout=0.07)
+    assert error.value.reason == "polling_timeout"
+
+    def malformed(_url, *, body, **_kwargs):
+        return json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": json.loads(body)["id"],
+                "result": {
+                    "kind": "task",
+                    "id": str(task.id),
+                    "contextId": str(task.id),
+                    "status": {"state": "completed"},
+                    "artifacts": [],
+                },
+            }
+        ).encode()
+
+    monkeypatch.setattr(outbound_https, "request", malformed)
+    with pytest.raises(OutboundResponseError, match="invalid typed task or artifact"):
+        sdk.get_task_status(task.reference, grant=grant)

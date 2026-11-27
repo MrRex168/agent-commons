@@ -207,7 +207,12 @@ def request(
     try:
         end = monotonic() + TOTAL_SECONDS
         url = _url(value)
-        address = _resolve(url, DNS_SECONDS)
+        dns_budget = DNS_SECONDS
+        if valid_until is not None:
+            dns_budget = min(dns_budget, (valid_until - datetime.now(UTC)).total_seconds())
+            if dns_budget <= 0:
+                raise TransferError("Peer credential or endpoint authorization expired")
+        address = _resolve(url, dns_budget)
         timeout = end - monotonic()
         if valid_until is not None:
             remaining = (valid_until - datetime.now(UTC)).total_seconds()
