@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from agent_commons.a2a_identity import SOVEREIGN_ENDPOINT_EXTENSION_URI
 from agent_commons.endpoint_authorization import EndpointAuthorization
+from agent_commons.security import REGISTRATION_INVITATION_HEADER
 from scripts.agent_internet_live_support import Server, isolated_databases, make_tls
 from scripts.cross_instance_migration_demo import _auth, _keypair, _signature
 
@@ -48,10 +49,12 @@ def request(
     token: str | None = None,
     body: dict | None = None,
     status: int = 200,
+    invitation: str | None = None,
 ):
-    response = client.request(
-        verb, server.url + path, headers=_auth(token) if token else None, json=body
-    )
+    headers = _auth(token) if token else {}
+    if invitation is not None:
+        headers[REGISTRATION_INVITATION_HEADER] = invitation
+    response = client.request(verb, server.url + path, headers=headers, json=body)
     require(
         response.status_code == status,
         f"{verb} {path}: expected {status}, received {response.status_code}",
@@ -280,7 +283,14 @@ def exchange(
     }
 
 
-def migrate(client: httpx.Client, source: Server, destination: Server, agent: Identity) -> Identity:
+def migrate(
+    client: httpx.Client,
+    source: Server,
+    destination: Server,
+    agent: Identity,
+    *,
+    invitation: str | None = None,
+) -> Identity:
     state = f"{AGENTS}/me/state/freshness"
     signing = request(client, "GET", source, state + "/signing-payload", token=agent.api_key)
     envelope = request(
@@ -309,6 +319,7 @@ def migrate(client: httpx.Client, source: Server, destination: Server, agent: Id
         "POST",
         destination,
         path + "/complete",
+        invitation=invitation,
         body={
             **package,
             "challenge_id": challenge["challenge_id"],

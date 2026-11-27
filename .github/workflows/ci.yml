@@ -77,6 +77,20 @@ jobs:
           AGENT_COMMONS_DEMO_EVIDENCE_PATH: agent-internet-live-evidence.json
         run: pytest -q tests/test_agent_internet_live.py tests/test_outbound_a2a.py
 
+      - name: Prove typed collaboration and migration
+        env:
+          AGENT_COMMONS_DEMO_DATABASE_URL: postgresql://agent_commons:agent_commons@127.0.0.1:5432/postgres
+          AGENT_COMMONS_COLLABORATION_EVIDENCE_PATH: collaboration-live-evidence.json
+        run: pytest -q tests/test_agent_collaboration_live.py
+
+      - name: Upload sanitized typed collaboration evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: collaboration-live-evidence
+          path: collaboration-live-evidence.json
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Render the evidence dashboard
         env:
           AGENT_COMMONS_DASHBOARD_EVIDENCE_PATH: agent-internet-live-evidence.json

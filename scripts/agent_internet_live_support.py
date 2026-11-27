@@ -157,6 +157,13 @@ class Server:
         )
         return server
 
+    def environment(self) -> dict[str, str]:
+        return {
+            "PATH": os.environ["PATH"],
+            "AGENT_COMMONS_DATABASE_URL": self.database.render_as_string(hide_password=False),
+            "AGENT_COMMONS_API_URL": self.url,
+        }
+
     def start(
         self,
         client: httpx.Client,
@@ -168,14 +175,13 @@ class Server:
         links: list | None = None,
         database_grants: bool = False,
         app_entrypoint: str = "scripts.agent_internet_live_app:app",
+        collaboration: dict[str, list[str]] | None = None,
     ) -> None:
         self.stop()
         fd = self.listener.fileno()
         # Do not inherit proxy settings, application credentials, or remote database URLs.
         env = {
-            "PATH": os.environ["PATH"],
-            "AGENT_COMMONS_DATABASE_URL": self.database.render_as_string(hide_password=False),
-            "AGENT_COMMONS_API_URL": self.url,
+            **self.environment(),
             "AGENT_COMMONS_A2A_TASK_PEERS": json.dumps(peers or []),
             "AGENT_INTERNET_LIVE_CARDS": json.dumps(cards),
             "AGENT_INTERNET_LIVE_LINKS": json.dumps(links or []),
@@ -184,6 +190,8 @@ class Server:
         if database_grants:
             env["AGENT_COMMONS_REGISTRATION_ADMISSION"] = "invite"
             env["AGENT_COMMONS_A2A_DATABASE_GRANTS"] = "true"
+        if collaboration is not None:
+            env.update(collaboration_environment(collaboration))
         process = subprocess.Popen(
             [
                 sys.executable,
@@ -221,3 +229,13 @@ class Server:
         if self.process is not None:
             _stop(self.process)
             self.process = None
+
+
+def collaboration_environment(skills: dict[str, list[str]]) -> dict[str, str]:
+    return {
+        "AGENT_COMMONS_REGISTRATION_ADMISSION": "invite",
+        "AGENT_COMMONS_A2A_DATABASE_GRANTS": "true",
+        "AGENT_COMMONS_PREVIEW_LIMITS": "true",
+        "AGENT_COMMONS_COLLABORATION_EXECUTION": "true",
+        "AGENT_COMMONS_COLLABORATION_SKILLS": json.dumps(skills),
+    }
