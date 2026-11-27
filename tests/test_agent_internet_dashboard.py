@@ -192,3 +192,65 @@ def test_real_milestone_evidence():
     assert "All evidence checks passed" in response.text
     assert response.text.count("Completed and retrieved") == 3
     assert "<code>1</code>" in response.text and "<code>2</code>" in response.text
+
+
+def test_collaboration_failure_has_no_success_states(tmp_path):
+    from scripts.collaboration_live_evidence import FailedReport
+
+    path = tmp_path / "failed.json"
+    path.write_text(FailedReport().json_report())
+    with TestClient(create_app(path)) as client:
+        response = client.get("/")
+    assert response.status_code == 200
+    assert "Collaboration run failed" in response.text
+    assert "Run passed" not in response.text
+    assert "Typed task outcomes" not in response.text
+
+
+def test_real_collaboration_evidence(tmp_path):
+    name = os.environ.get("AGENT_COMMONS_COLLABORATION_EVIDENCE_PATH")
+    if not name:
+        pytest.skip("Requires recorded typed collaboration evidence")
+    path = tmp_path / "collaboration.json"
+    raw = Path(name).read_text()
+    path.write_text(raw)
+    document = json.loads(raw)
+    with TestClient(create_app(path)) as client:
+        response = client.get("/")
+        assert response.status_code == 200
+        assert "Atlas → Nova → Orion" in response.text
+        assert "19 of 19 passed" in response.text
+        assert response.text.count('class="badge good">Passed') == 19
+        assert f"{document['runtime_seconds']:.3f} s" in response.text
+        for task in document["tasks"]:
+            assert task["task_id"] in response.text
+            assert task["artifact_digest"] in response.text
+        for field in ("reference_id", "follow_id"):
+            assert document["migration"][field] in response.text
+        assert "Atlas history survived restart" in response.text
+        assert "Fresh destination grant verified" in response.text
+        assert "127.0.0.1" not in response.text
+        assert client.post("/").status_code == 405
+
+        invalid_reports = [
+            raw.replace('"schema_version": 1', '"schema_version": 7'),
+            raw.replace('"schema_version": 1', '"schema_version": true'),
+            raw.replace('"location_before": 1', '"location_before": true'),
+            raw.replace('"location_before": 1', '"location_before": "1"'),
+            raw.replace('"runtime_seconds":', '"runtime_seconds": 12, "runtime_seconds":'),
+            raw.replace(
+                '"runtime_seconds":', '"injected": "<script>secret</script>", "runtime_seconds":'
+            ),
+            raw.replace(
+                '"root_reference_and_follow_preserved": "pass"',
+                '"root_reference_and_follow_preserved": "fail"',
+            ),
+            raw + " " * 8192,
+        ]
+        for invalid in invalid_reports:
+            assert invalid != raw
+            path.write_text(invalid)
+            response = client.get("/")
+            assert response.status_code == 422
+            assert "<script>secret</script>" not in response.text
+            assert "Run passed" not in response.text

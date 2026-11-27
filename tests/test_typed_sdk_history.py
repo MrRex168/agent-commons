@@ -5,6 +5,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -295,3 +296,21 @@ def test_history_migration_round_trip_preserves_agents():
             assert db.exec_driver_sql("SELECT count(*) FROM collaboration_history").scalar() == 0
         assert db.exec_driver_sql("SELECT id FROM agents").scalar() == owner
         transaction.rollback()
+
+
+def test_developer_guide_sdk_snippet(linked):
+    sdk, grant, *_ = linked
+    guide = Path(__file__).resolve().parents[1] / "docs/collaboration/developer-guide.md"
+    snippet = guide.read_text(encoding="utf-8").split("<!-- tested-sdk-example -->", 1)[1]
+    code = snippet.split("```python\n", 1)[1].split("```", 1)[0]
+    example = {}
+    exec(compile(code, str(guide), "exec"), example)
+    task = example["submit_analysis"](sdk, grant)
+    assert typed_worker.run_once()
+    artifact, page = example["read_analysis"](sdk, grant, task)
+    assert artifact == {"count": 3, "total": 4, "minimum": -1, "maximum": 3}
+    assert page.records[0].task_id == task.id
+
+    queued = example["submit_analysis"](sdk, grant)
+    assert sdk.get_task_status(queued.reference, grant=grant).status == "submitted"
+    assert sdk.cancel_task(queued.reference, grant=grant).status == "canceled"

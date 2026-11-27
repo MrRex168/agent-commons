@@ -1,5 +1,7 @@
 """Serve a previously generated Agent Internet Live evidence file on loopback."""
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -13,7 +15,18 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from scripts.collaboration_live_evidence import (
+    MAX_EVIDENCE_BYTES as MAX_COLLABORATION_BYTES,
+)
+from scripts.collaboration_live_evidence import (
+    Evidence as CollaborationEvidence,
+)
+from scripts.collaboration_live_evidence import (
+    FailedReport,
+)
+
 MAX_EVIDENCE_BYTES = 16_384
+
 Fingerprint = Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
 RecordId = Annotated[str, Field(pattern=r"^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$")]
 LocationSequence = Annotated[int, Field(ge=1, le=2**53 - 1)]
@@ -145,7 +158,7 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return value
 
 
-def load_evidence(path: Path) -> Evidence:
+def load_evidence(path: Path) -> Evidence | CollaborationEvidence | FailedReport:
     # The configured path is the only input. Never open symlinks or block on a FIFO.
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as evidence:
@@ -155,12 +168,20 @@ def load_evidence(path: Path) -> Evidence:
         raw = evidence.read(MAX_EVIDENCE_BYTES + 1)
         if len(raw) > MAX_EVIDENCE_BYTES:
             raise ValueError("Evidence exceeds size limit")
-    return Evidence.model_validate(
-        json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
-    )
+    document = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
+    if not isinstance(document, dict) or type(document.get("schema_version")) is not int:
+        raise ValueError("Missing or invalid evidence version")
+    if "outcome" not in document:
+        return Evidence.model_validate(document)
+    if len(raw) > MAX_COLLABORATION_BYTES or document["schema_version"] != 1:
+        raise ValueError("Unsupported collaboration evidence")
+    # Strict JSON accepts the wire representations of UUIDs and fixed-length arrays.
+    if document["outcome"] == "pass":
+        return CollaborationEvidence.model_validate_json(raw, strict=True)
+    return FailedReport.model_validate_json(raw, strict=True)
 
 
-def _code(value: str | int) -> str:
+def _code(value: object) -> str:
     return f"<code>{escape(str(value))}</code>"
 
 
@@ -331,6 +352,114 @@ def render(evidence: Evidence) -> str:
 </section>""")
 
 
+COLLABORATION_CHECKS = {
+    "database_isolation": "Isolated PostgreSQL databases and roles",
+    "signed_discovery": "Signed capability discovery",
+    "skill_scoped_enrollment": "Separate skill-scoped grants",
+    "structured_handoff": "Validated analysis passed to Orion",
+    "unauthorized_skill_rejected": "Unauthorized skill rejected",
+    "cross_owner_task_rejected": "Cross-owner task read rejected",
+    "cross_owner_history_denied": "Cross-owner history denied",
+    "idempotent_retry": "Duplicate returned original task",
+    "conflicting_retry_rejected": "Conflicting retry rejected",
+    "restart_history_preserved": "Atlas history survived restart",
+    "migration_history_preserved": "Original execution history preserved",
+    "root_reference_and_follow_preserved": "Identity, reference and follow preserved",
+    "stale_location_rejected": "Stale location rejected",
+    "old_credential_rejected_at_destination": "Source grant rejected at destination",
+    "source_task_not_transferred": "Source task stayed at its execution origin",
+    "fresh_destination_grant": "Fresh destination grant verified",
+    "revoked_grant_rejected": "Revoked grant rejected",
+    "isolated_workers_executed": "Tasks executed by isolated workers",
+    "cleanup_completed": "Fixture resources cleaned up",
+}
+COLLABORATION_ORIGINS = {
+    "nova-source": "Atlas → Nova · source",
+    "orion": "Atlas → Orion · validated analysis handoff",
+    "nova-target": "Atlas → Nova · destination",
+}
+
+
+def render_collaboration(evidence: CollaborationEvidence | FailedReport) -> str:
+    if isinstance(evidence, FailedReport):
+        return _layout(
+            '<section class="panel unavailable"><h1>Collaboration run failed</h1>'
+            "<p>The report contains no completed steps or task evidence.</p></section>"
+        )
+
+    checks = evidence.checks.model_dump()
+    passed = sum(outcome == "pass" for outcome in checks.values())
+    check_rows = "".join(
+        f"<li><span>{escape(COLLABORATION_CHECKS[name])}</span>"
+        f"{_badge(outcome == 'pass', 'Passed', 'Failed')}</li>"
+        for name, outcome in checks.items()
+    )
+    identities = "".join(
+        f"<div><h3>{escape(agent.title())}</h3>{_code(root)}</div>"
+        for agent, root in evidence.identities.model_dump().items()
+    )
+    advertised = evidence.advertised_skills.model_dump()
+    grants = "".join(
+        f"<li><div><h3>{escape(agent.title())}</h3>"
+        f'<p class="event-detail">Discovered {_code(advertised[agent][0])} · '
+        f"Authorized {_code(skills[0])}</p></div></li>"
+        for agent, skills in evidence.authorized_skills.model_dump().items()
+    )
+    tasks = "".join(
+        f'<li><div class="event-body"><div class="event-header">'
+        f"<h3>{escape(COLLABORATION_ORIGINS[task.origin])}</h3>"
+        f"{_badge(task.state == 'completed', 'Completed', 'Incomplete')}</div>"
+        f'<p class="event-detail">Skill {_code(task.skill)} · Task {_code(task.task_id)}</p>'
+        f'<p class="event-detail">Artifact SHA-256 {_code(task.artifact_digest)}</p></div></li>'
+        for task in evidence.tasks
+    )
+    move = evidence.migration
+    return _layout(f"""
+<section class="hero" aria-labelledby="hero-title">
+  <p class="eyebrow">Agent Collaboration Live</p>
+  <div class="hero-title"><h1 id="hero-title">Atlas → Nova → Orion</h1>
+    {_badge(evidence.outcome == "pass", "Run passed", "Run failed")}</div>
+  <p class="lede">Nova analyzed synthetic data. Atlas passed the validated result to Orion.</p>
+  <p class="scope">Recorded evidence from four isolated local HTTPS instances.
+    Observed demo runtime {escape(f"{evidence.runtime_seconds:.3f}")} s, including
+    fixture setup and cleanup. This elapsed time describes one demo run.</p>
+</section>
+<section class="panel" aria-labelledby="identity">
+  <div class="section-head"><h2 id="identity">Verified discovery and skill grants</h2></div>
+  <div class="identities collaboration-identities">{identities}</div>
+  <ul class="events">{grants}</ul>
+</section>
+<section class="panel" aria-labelledby="tasks">
+  <div class="section-head"><h2 id="tasks">Typed task outcomes</h2></div>
+  <ol class="events">{tasks}</ol>
+</section>
+<section class="panel" aria-labelledby="migration">
+  <div class="section-head"><h2 id="migration">History and signed migration</h2></div>
+  <p>{escape(COLLABORATION_CHECKS["restart_history_preserved"])} ·
+     {escape(COLLABORATION_CHECKS["migration_history_preserved"])}</p>
+  <div class="location">
+    <div><strong>Nova’s signed location sequence</strong><p>Source to destination</p></div>
+    <div class="sequence">{_code(move.location_before)}
+      <span aria-label="to">→</span> {_code(move.location_after)}</div>
+  </div>
+  <dl class="continuity">
+    <div class="continuity-row"><dt>Preserved Nova fingerprint</dt>
+      <dd>{_code(evidence.identities.nova)}</dd></div>
+    <div class="continuity-row"><dt>Preserved remote reference</dt>
+      <dd>{_code(move.reference_id)}</dd></div>
+    <div class="continuity-row"><dt>Preserved follow</dt><dd>{_code(move.follow_id)}</dd></div>
+  </dl>
+  <p>{escape(COLLABORATION_CHECKS["fresh_destination_grant"])}.
+    Atlas then completed a fresh typed task at Nova’s destination.
+    Exclusive control and public deployment remain unverified.</p>
+</section>
+<section class="panel" aria-labelledby="checks">
+  <div class="section-head"><h2 id="checks">Verification checks</h2>
+    <span class="muted">{passed} of {len(checks)} passed</span></div>
+  <ul class="checks">{check_rows}</ul>
+</section>""")
+
+
 def create_app(evidence_path: Path) -> FastAPI:
     app = FastAPI(openapi_url=None, docs_url=None, redoc_url=None, redirect_slashes=False)
     stylesheet = Path(__file__).with_suffix(".css").read_text(encoding="utf-8")
@@ -346,7 +475,12 @@ def create_app(evidence_path: Path) -> FastAPI:
             message = "The configured evidence file could not be read or failed validation."
             status = 422
         else:
-            return HTMLResponse(render(evidence), headers=HEADERS)
+            content = (
+                render(evidence)
+                if isinstance(evidence, Evidence)
+                else render_collaboration(evidence)
+            )
+            return HTMLResponse(content, headers=HEADERS)
         page = _layout(
             f'<section class="panel unavailable"><h1>Evidence unavailable</h1>'
             f"<p>{escape(message)}</p></section>"
