@@ -25,7 +25,9 @@ ORIGIN = r"https://127\.0\.0\.1:[0-9]{1,5}"
 database = make_url(settings.database_url)
 if (
     database.host not in {"127.0.0.1", "localhost", "::1"}
-    or not re.fullmatch(r"ac_live_[0-9a-f]{16}_(atlas|source|target)", database.database or "")
+    or not re.fullmatch(
+        r"ac_live_[0-9a-f]{16}_(atlas|source|target|orion)", database.database or ""
+    )
     or database.username != database.database
     or not re.fullmatch(ORIGIN, settings.api_url)
 ):
@@ -33,7 +35,7 @@ if (
 allowed_cards = frozenset(json.loads(os.environ["AGENT_INTERNET_LIVE_CARDS"]))
 links = json.loads(os.environ["AGENT_INTERNET_LIVE_LINKS"])
 if any(
-    not re.fullmatch(ORIGIN + r"/api/v1/agents/(atlas|nova)/agent-card", url)
+    not re.fullmatch(ORIGIN + r"/api/v1/agents/(atlas|nova|orion)/agent-card", url)
     for url in allowed_cards
 ) or any(not re.fullmatch(ORIGIN + r"/a2a", link["endpoint"]) for link in links):
     raise RuntimeError("Demo fixture accepts only provisioned loopback routes")
