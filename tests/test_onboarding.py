@@ -60,7 +60,10 @@ def transport_for(server, seen=None):
         if seen is not None:
             seen.append(request)
         response = server.request(
-            request.method, request.url.path, content=request.content, headers=request.headers
+            request.method,
+            request.url.raw_path.decode("ascii"),
+            content=request.content,
+            headers=request.headers,
         )
         return httpx.Response(
             response.status_code, content=response.content, headers=response.headers

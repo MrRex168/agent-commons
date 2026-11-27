@@ -1,11 +1,14 @@
 """Small synchronous client for the versioned Agent Commons REST API."""
 
+import hashlib
 import json
+import math
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from time import monotonic, sleep
 from typing import Annotated, Literal
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from uuid import UUID, uuid4
 
 import base58
@@ -14,7 +17,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from pydantic import BaseModel, Field, TypeAdapter
 
 from agent_commons import outbound_https
-from agent_commons.collaboration import SkillScopes
+from agent_commons.collaboration import SkillScopes, _unique_object, validate_typed_request
 from agent_commons.endpoint_authorization import (
     SOVEREIGN_ENDPOINT_EXTENSION_URI,
     EndpointAuthorization,
@@ -33,12 +36,50 @@ from agent_commons.peer_protocol import (
     https_audience,
 )
 from agent_commons.security import REGISTRATION_INVITATION_HEADER
+from agent_commons.typed_client_models import (
+    TERMINAL_STATES,
+    CollaborationObservation,
+    CollaborationPage,
+    KnownPeerPage,
+    TypedTask,
+    TypedTaskRef,
+    decode_task,
+)
 
 
 class CommonsError(RuntimeError):
     def __init__(self, message: str, status: int | None = None):
         super().__init__(message)
         self.status = status
+
+
+class EndpointVerificationError(CommonsError):
+    """The approved endpoint could not be verified for this call."""
+
+
+class OutboundResponseError(CommonsError):
+    """The peer returned an invalid or oversized response."""
+
+
+class TypedTaskError(CommonsError):
+    def __init__(self, reason: str, message: str, *, status: int | None = None):
+        super().__init__(message, status)
+        self.reason = reason
+
+
+class HistoryWriteError(CommonsError):
+    """The peer responded, but the caller's history write failed."""
+
+    def __init__(self, task: TypedTask):
+        super().__init__("Remote task response verified, but local history was not saved")
+        self.task = task
+
+
+def _remaining(end: float) -> float:
+    remaining = end - monotonic()
+    if remaining <= 0:
+        raise TypedTaskError("polling_timeout", "Task polling deadline exceeded")
+    return remaining
 
 
 class PeerVerification(BaseModel):
@@ -117,6 +158,7 @@ class CommonsClient:
         body: dict | None = None,
         authenticated: bool = True,
         invitation: str | None = None,
+        end: float | None = None,
     ) -> dict:
         headers = {}
         if authenticated:
@@ -126,8 +168,36 @@ class CommonsClient:
         if invitation is not None:
             headers[REGISTRATION_INVITATION_HEADER] = invitation
         try:
-            response = self._http.request(method, path, json=body, headers=headers)
-        except (httpx.HTTPError, ValueError):
+            if end is None:
+                response = self._http.request(method, path, json=body, headers=headers)
+            else:
+                headers["Accept-Encoding"] = "identity"
+                with self._http.stream(
+                    method,
+                    path,
+                    json=body,
+                    headers=headers,
+                    timeout=min(2, _remaining(end)),
+                ) as stream:
+                    if not stream.is_success:
+                        raise CommonsError(
+                            f"{action} failed (HTTP {stream.status_code})", stream.status_code
+                        )
+                    if stream.headers.get("content-encoding", "identity") != "identity":
+                        raise OutboundResponseError(f"{action} returned unsupported encoding")
+                    raw = bytearray()
+                    for chunk in stream.iter_bytes():
+                        _remaining(end)
+                        if len(raw) + len(chunk) > 1024 * 1024:
+                            raise CommonsError(f"{action} returned an oversized response")
+                        raw.extend(chunk)
+                    result = json.loads(raw)
+                    if not isinstance(result, dict):
+                        raise ValueError
+                    return result
+        except (httpx.HTTPError, ValueError, RecursionError):
+            if end is not None:
+                _remaining(end)
             raise CommonsError(f"{action} could not contact the configured server") from None
         if not response.is_success:
             raise CommonsError(
@@ -136,7 +206,7 @@ class CommonsClient:
         try:
             result = response.json()
         except ValueError:
-            raise CommonsError(f"{action} returned an invalid response") from None
+            raise OutboundResponseError(f"{action} returned an invalid response") from None
         if not isinstance(result, dict):
             raise CommonsError(f"{action} returned an invalid response")
         return result
@@ -409,10 +479,15 @@ class CommonsClient:
             raise CommonsError("Peer redemption returned an invalid grant") from None
         return grant
 
-    def _verified_destination(self, approved: DestinationApproval) -> EndpointAuthorization:
+    def _verified_destination(
+        self, approved: DestinationApproval, *, end: float | None = None
+    ) -> EndpointAuthorization:
         try:
             result = self._request(
-                "Peer refresh", "POST", f"agents/remote/{approved.reference_id}/refresh"
+                "Peer refresh",
+                "POST",
+                f"agents/remote/{approved.reference_id}/refresh",
+                **({"end": end} if end is not None else {}),
             )
             card = result["card_snapshot"]
             if (
@@ -442,10 +517,13 @@ class CommonsClient:
                 transport=approved.transport,
                 now=datetime.now(UTC),
             )
-        except (KeyError, TypeError, ValueError, CommonsError):
-            raise CommonsError(
+        except TypedTaskError:
+            raise
+        except (KeyError, TypeError, ValueError, CommonsError) as exc:
+            raise EndpointVerificationError(
                 "Approved sovereign destination could not be verified. Check the Card, "
-                "controller, and current location"
+                "controller, and current location",
+                getattr(exc, "status", None),
             ) from None
         return signed.authorization
 
@@ -514,20 +592,7 @@ class CommonsClient:
     def _task(self, grant: BoundGrant, method: Method, params: dict) -> TaskStatistics:
         if isinstance(grant.grant, SkillIssuedGrant):
             raise CommonsError("Typed collaboration execution is unavailable")
-        if grant.home_origin != self.origin:
-            raise CommonsError("Credential belongs to a different Agent Commons home server")
-        if method not in grant.grant.scopes:
-            raise CommonsError("Peer credential does not permit this A2A method")
-        if grant.expires_at <= datetime.now(UTC):
-            raise CommonsError("Peer credential has expired")
-        claim = self._verified_destination(grant.destination)
-        if (
-            claim.identity_sequence != grant.identity_sequence
-            or claim.location_sequence != grant.location_sequence
-        ):
-            raise CommonsError("Peer location or identity sequence conflicts with enrollment")
-        if grant.expires_at <= datetime.now(UTC):
-            raise CommonsError("Peer credential has expired")
+        claim = self._dispatch_authorization(grant, method)
         request_id = str(uuid4())
         response = _outbound_json(
             "A2A task request",
@@ -550,6 +615,262 @@ class CommonsClient:
             return statistics(response["result"])
         except (KeyError, TypeError, ValueError):
             raise CommonsError("A2A server returned an invalid task result") from None
+
+    def _dispatch_authorization(
+        self, grant: BoundGrant, method: CollaborationMethod, *, end: float | None = None
+    ) -> EndpointAuthorization:
+        if grant.home_origin != self.origin:
+            raise CommonsError("Credential belongs to a different Agent Commons home server")
+        if method not in grant.grant.scopes:
+            raise CommonsError("Peer credential does not permit this A2A method")
+        if grant.expires_at <= datetime.now(UTC):
+            raise CommonsError("Peer credential has expired")
+        claim = (
+            self._verified_destination(grant.destination)
+            if end is None
+            else self._verified_destination(grant.destination, end=end)
+        )
+        if (
+            claim.identity_sequence != grant.identity_sequence
+            or claim.location_sequence != grant.location_sequence
+        ):
+            raise EndpointVerificationError(
+                "Peer location or identity sequence conflicts with enrollment"
+            )
+        if grant.expires_at <= datetime.now(UTC):
+            raise CommonsError("Peer credential has expired")
+        return claim
+
+    def discover_known(
+        self, *, skill: str, verified_only: bool = True, cursor: str | None = None
+    ) -> KnownPeerPage:
+        params = {"skill_exact": skill, "verified_only": str(verified_only).lower()}
+        if cursor is not None:
+            params["cursor"] = cursor
+        response = self._request(
+            "Known-peer discovery", "GET", "agents/discovery/remote?" + urlencode(params)
+        )
+        try:
+            return KnownPeerPage.model_validate(response)
+        except ValueError:
+            raise OutboundResponseError("Discovery returned invalid records") from None
+
+    def delegate(
+        self, *, grant: BoundGrant, skill: str, data: dict, message_id: str, deadline: datetime
+    ) -> TypedTask:
+        try:
+            argument = {
+                "skill": skill,
+                "input": data,
+                "message_id": message_id,
+                "deadline": deadline.isoformat(),
+            }
+            validate_typed_request(
+                json.dumps(argument, ensure_ascii=False).encode(),
+                now=datetime.now(UTC),
+                check_deadline=False,
+            )
+        except (AttributeError, TypeError, ValueError, RecursionError):
+            raise TypedTaskError("invalid_input", "Invalid typed task input") from None
+        params = {
+            "message": {
+                "kind": "message",
+                "role": "user",
+                "messageId": message_id,
+                "parts": [
+                    {
+                        "kind": "data",
+                        "data": {
+                            "skill": skill,
+                            "input": data,
+                            "deadline": argument["deadline"],
+                        },
+                    }
+                ],
+            }
+        }
+        return self._typed_task(grant, "message/send", params, skill=skill)
+
+    def get_task_status(self, task: TypedTaskRef, *, grant: BoundGrant) -> TypedTask:
+        return self._task_for_reference(task, grant, "tasks/get")
+
+    def cancel_task(self, task: TypedTaskRef, *, grant: BoundGrant) -> TypedTask:
+        return self._task_for_reference(task, grant, "tasks/cancel")
+
+    def wait_for_task(
+        self, task: TypedTaskRef, *, grant: BoundGrant, timeout: float = 30, interval: float = 7
+    ) -> TypedTask:
+        if not (math.isfinite(timeout) and 0 < timeout <= 120 and 1 <= interval <= 30):
+            raise ValueError("Use a polling timeout up to 120 seconds and interval of 1–30 seconds")
+        end = monotonic() + timeout
+        while True:
+            _remaining(end)
+            result = self._task_for_reference(task, grant, "tasks/get", end=end)
+            if result.status in TERMINAL_STATES:
+                return result
+            sleep(min(interval, _remaining(end)))
+
+    def list_collaboration_history(self, *, cursor: UUID | None = None) -> CollaborationPage:
+        path = "agents/collaboration/history"
+        if cursor is not None:
+            path += "?" + urlencode({"cursor": str(cursor)})
+        response = self._request("Collaboration history", "GET", path)
+        try:
+            return CollaborationPage.model_validate(response)
+        except ValueError:
+            raise OutboundResponseError("History returned invalid records") from None
+
+    def _task_for_reference(
+        self,
+        task: TypedTaskRef,
+        grant: BoundGrant,
+        method: CollaborationMethod,
+        *,
+        end: float | None = None,
+    ) -> TypedTask:
+        if (
+            task.peer_root != grant.destination.peer_root
+            or task.endpoint != grant.destination.endpoint
+            or task.identity_sequence != grant.identity_sequence
+            or task.location_sequence != grant.location_sequence
+        ):
+            raise EndpointVerificationError("Task belongs to a different execution location")
+        return self._typed_task(
+            grant, method, {"id": str(task.id)}, skill=task.skill, reference=task, end=end
+        )
+
+    def _typed_task(
+        self,
+        grant: BoundGrant,
+        method: CollaborationMethod,
+        params: dict,
+        *,
+        skill: str,
+        reference: TypedTaskRef | None = None,
+        end: float | None = None,
+    ) -> TypedTask:
+        if (
+            not isinstance(grant.grant, SkillIssuedGrant)
+            or skill not in grant.grant.skills
+            or method not in grant.grant.scopes
+            or self.origin != grant.home_origin
+        ):
+            raise TypedTaskError("scope_denied", "Typed grant does not authorize this request")
+        if grant.expires_at <= datetime.now(UTC):
+            raise TypedTaskError("credential_unavailable", "Peer credential has expired")
+        end = min(end, monotonic() + 20) if end is not None else monotonic() + 20
+        try:
+            identity = self._request("Caller identity", "GET", "agents/me/identity", end=end)
+        except TypedTaskError:
+            raise
+        except CommonsError as exc:
+            raise TypedTaskError(
+                "home_unavailable",
+                "Could not verify the caller at its home server",
+                status=exc.status,
+            ) from None
+        if identity.get("fingerprint") != grant.grant.caller_root:
+            raise TypedTaskError("scope_denied", "Local account does not own the caller identity")
+        try:
+            claim = self._dispatch_authorization(grant, method, end=end)
+        except EndpointVerificationError as exc:
+            if exc.status == 429:
+                raise TypedTaskError(
+                    "rate_limited", "Home resolver quota exceeded", status=429
+                ) from None
+            raise
+        expiry = min(grant.expires_at, claim.expiration())
+        expiry = min(expiry, datetime.now(UTC) + timedelta(seconds=_remaining(end)))
+        request_id = str(uuid4())
+        try:
+            reply = _outbound_json(
+                "Typed task request",
+                grant.destination.endpoint,
+                {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
+                bearer=grant.grant.token.get_secret_value(),
+                valid_until=expiry,
+            )
+        except OutboundResponseError:
+            raise
+        except CommonsError as exc:
+            if end is not None:
+                _remaining(end)
+            if exc.status in (401, 403):
+                raise TypedTaskError(
+                    "credential_unavailable" if exc.status == 401 else "scope_denied",
+                    "Peer denied the credential or method",
+                    status=exc.status,
+                ) from None
+            if exc.status == 429:
+                raise TypedTaskError(
+                    "rate_limited", "Peer task quota exceeded", status=429
+                ) from None
+            raise TypedTaskError(
+                "request_uncertain",
+                "Peer request failed. Retry a submission with its original ID and body",
+                status=exc.status,
+            ) from None
+        if reply.get("jsonrpc") != "2.0" or reply.get("id") != request_id:
+            raise OutboundResponseError("Peer returned an invalid RPC envelope")
+        if "error" in reply:
+            error = reply["error"]
+            if not isinstance(error, dict) or "result" in reply:
+                raise OutboundResponseError("Peer returned an invalid RPC error")
+            code = error.get("code")
+            if type(code) is not int:
+                raise OutboundResponseError("Peer returned an invalid RPC error")
+            reason, message = {
+                -32001: ("task_missing", "Task is unknown or expired at its execution server"),
+                -32002: ("not_cancelable", "Task cannot be canceled in its current state"),
+                -32010: ("message_conflict", "Message ID was used for a different request"),
+            }.get(code, ("rejected", "Peer declined the typed task request"))
+            raise TypedTaskError(reason, message)
+        try:
+            identifier, state, artifact = decode_task(reply["result"], skill=skill)
+            if reference is not None and identifier != reference.id:
+                raise ValueError
+            task = TypedTask(
+                reference=reference
+                or TypedTaskRef(
+                    id=identifier,
+                    skill=skill,
+                    peer_root=grant.destination.peer_root,
+                    endpoint=grant.destination.endpoint,
+                    identity_sequence=claim.identity_sequence,
+                    location_sequence=claim.location_sequence,
+                ),
+                status=state,
+                artifact=artifact,
+            )
+        except (AttributeError, KeyError, TypeError, ValueError):
+            raise OutboundResponseError("Peer returned an invalid typed task or artifact") from None
+        observation = CollaborationObservation(
+            reference_id=grant.destination.reference_id,
+            caller_root=grant.grant.caller_root,
+            task=task.reference,
+            status=task.status,
+            artifact_digest=hashlib.sha256(
+                json.dumps(
+                    artifact,
+                    sort_keys=True,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+            if artifact is not None
+            else None,
+        )
+        try:
+            self._request(
+                "Collaboration history",
+                "POST",
+                "agents/collaboration/history",
+                body=observation.model_dump(mode="json"),
+                end=end,
+            )
+        except CommonsError:
+            raise HistoryWriteError(task) from None
+        return task
 
     def resolve_peer(self, card_url: str) -> PeerVerification:
         result = self._request(
@@ -589,7 +910,7 @@ def _outbound_json(
             bearer=bearer,
             valid_until=valid_until,
         )
-        result = json.loads(raw)
+        result = json.loads(raw, object_pairs_hook=_unique_object)
         if not isinstance(result, dict):
             raise ValueError
         return result
@@ -601,7 +922,9 @@ def _outbound_json(
             403: "scope or recipient denied",
         }.get(exc.status, f"HTTP {exc.status}")
         raise CommonsError(f"{action} failed ({reason})", exc.status) from None
+    except outbound_https.ResponseTooLarge:
+        raise OutboundResponseError(f"{action} returned an oversized response") from None
     except outbound_https.TransferError as exc:
         raise CommonsError(f"{action} failed. {exc}") from None
     except (ValueError, RecursionError):
-        raise CommonsError(f"{action} returned an invalid response") from None
+        raise OutboundResponseError(f"{action} returned an invalid response") from None

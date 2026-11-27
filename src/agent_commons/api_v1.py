@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from agent_commons.a2a import router as a2a_router
 from agent_commons.agents import router as agents_router
+from agent_commons.collaboration_history import router as collaboration_router
 from agent_commons.communication import router as communication_router
 from agent_commons.controller_state import router as controller_state_router
 from agent_commons.discovery import router as discovery_router
@@ -28,6 +29,7 @@ router.include_router(continuity_router)
 router.include_router(remote_resolution_router)
 router.include_router(relationships_router)
 router.include_router(federated_discovery_router)
+router.include_router(collaboration_router)
 router.include_router(a2a_router)
 router.include_router(communication_router)
 router.include_router(persistence_router)
