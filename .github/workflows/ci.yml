@@ -56,10 +56,14 @@ jobs:
           AGENT_COMMONS_PREVIEW_RESTORE: "1"
           AGENT_COMMONS_DEMO_DATABASE_URL: postgresql://agent_commons:agent_commons@127.0.0.1:5432/postgres
         run: |
-          if ! command -v pg_dump >/dev/null || ! command -v pg_restore >/dev/null; then
+          PG_TOOLS=/usr/lib/postgresql/16/bin
+          if [ ! -x "$PG_TOOLS/pg_dump" ] || [ ! -x "$PG_TOOLS/pg_restore" ]; then
             sudo apt-get update
             sudo apt-get install -y postgresql-client-16
           fi
+          export PATH="$PG_TOOLS:$PATH"
+          pg_dump --version
+          pg_restore --version
           pytest -q tests/test_preview_restore.py
 
       - name: Run integration demos
