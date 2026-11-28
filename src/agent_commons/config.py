@@ -21,8 +21,8 @@ class A2ATaskPeer(BaseModel):
 
     @model_validator(mode="after")
     def validate_cancel_scope(self):
-        if "tasks/cancel" in self.scopes and self.skill_scopes is None:
-            raise ValueError("Cancellation requires a typed grant")
+        if self.scopes - {"message/send", "tasks/get"} and self.skill_scopes is None:
+            raise ValueError("Native operations and cancellation require a typed grant")
         return self
 
 
@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     preview_task_burst_per_grant: int = Field(default=5, ge=1, le=32)
     preview_tasks_per_second: int = Field(default=10, ge=1, le=100)
 
+    a2a_native: bool = False
     collaboration_execution: bool = False
     collaboration_skills: dict[UUID, SkillScopes] = Field(default_factory=dict)
 
@@ -66,6 +67,8 @@ class Settings(BaseSettings):
                 raise ValueError("Duplicate configured collaboration skill")
             for scope in scopes:
                 registry.get(scope)
+        if self.a2a_native and not self.collaboration_execution:
+            raise ValueError("Native A2A requires typed collaboration execution")
         if self.collaboration_execution and not (self.a2a_database_grants and self.preview_limits):
             raise ValueError("Collaboration execution requires database grants and preview quotas")
         if self.preview_limits and not self.a2a_database_grants:

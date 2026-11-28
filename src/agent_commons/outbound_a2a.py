@@ -22,6 +22,7 @@ class DestinationApproval(BaseModel):
     recipient_agent_id: UUID
     endpoint: str
     transport: Literal["JSONRPC"] = "JSONRPC"
+    native_card_url: str | None = None
 
     @model_validator(mode="after")
     def canonical_endpoint(self):
@@ -32,6 +33,18 @@ class DestinationApproval(BaseModel):
             or "?" in self.endpoint
         ):
             raise ValueError("Approve an exact canonical HTTPS task URL without a query")
+        if self.native_card_url is not None:
+            card = httpx.URL(self.native_card_url)
+            if (
+                self.endpoint != self.audience + "/a2a"
+                or canonical_endpoint_url(self.native_card_url) != self.native_card_url
+                or str(card) != self.native_card_url
+                or str(card.copy_with(path="/", query=None)).rstrip("/") != self.audience
+                or "?" in self.native_card_url
+                or not card.path.startswith("/api/v1/agents/")
+                or not card.path.endswith("/agent-card/v1")
+            ):
+                raise ValueError("Approve the exact native Card URL on the task origin")
         return self
 
     @property
@@ -66,6 +79,13 @@ class BoundGrant(BaseModel):
             self.grant.audience != self.destination.audience
             or self.grant.recipient_agent_id != self.destination.recipient_agent_id
             or self.grant.expires_at != self.expires_at
+            or (
+                self.destination.native_card_url is not None
+                and (
+                    not isinstance(self.grant, SkillIssuedGrant)
+                    or "a2a/1.0" not in self.grant.scopes
+                )
+            )
             or not re.fullmatch(prefix + r"[A-Za-z0-9_-]{43}", self.grant.token.get_secret_value())
         ):
             raise ValueError("Grant does not match the approved destination")

@@ -105,3 +105,31 @@ def decode_task(payload: dict, *, skill: str) -> tuple[UUID, TaskState, dict | N
     if artifacts:
         raise ValueError
     return identifier, state, None
+
+
+class NativeTaskStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    state: Literal[
+        "TASK_STATE_SUBMITTED",
+        "TASK_STATE_WORKING",
+        "TASK_STATE_COMPLETED",
+        "TASK_STATE_FAILED",
+        "TASK_STATE_CANCELED",
+        "TASK_STATE_REJECTED",
+    ]
+    timestamp: datetime
+
+
+class NativeTaskSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: UUID
+    contextId: UUID
+    status: NativeTaskStatus
+
+
+class NativeTaskPage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tasks: list[NativeTaskSummary] = Field(max_length=20)
+    pageSize: int = Field(strict=True, ge=0, le=20)
+    totalSize: int = Field(strict=True, ge=0, le=1024)
+    nextPageToken: UUID | Literal[""]

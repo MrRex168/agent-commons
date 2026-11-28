@@ -13,8 +13,8 @@ from agent_commons.collaboration import SkillScopes
 Method = Literal["message/send", "tasks/get"]
 Root = Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
 Scopes = Annotated[list[Method], Field(min_length=1, max_length=2)]
-CollaborationMethod = Literal["message/send", "tasks/get", "tasks/cancel"]
-CollaborationScopes = Annotated[list[CollaborationMethod], Field(min_length=1, max_length=3)]
+CollaborationMethod = Literal["message/send", "tasks/get", "tasks/cancel", "tasks/list", "a2a/1.0"]
+CollaborationScopes = Annotated[list[CollaborationMethod], Field(min_length=1, max_length=5)]
 DOMAIN = "agent-commons/peer-enrollment/v1"
 
 

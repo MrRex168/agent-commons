@@ -3,13 +3,14 @@
 import hashlib
 import json
 from datetime import UTC, datetime
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 from agent_commons.identity_crypto import verify_identity_signature
 
 SOVEREIGN_ENDPOINT_EXTENSION_URI = "urn:agent-commons:extension:sovereign-identity:v2"
+NATIVE_ENDPOINT_EXTENSION_URI = "urn:agent-commons:extension:native-interface:v1"
 ENDPOINT_AUTHORIZATION_DOMAIN = "agent-commons:sovereign-endpoint:v1"
 MAX_VALIDITY_SECONDS = 7 * 24 * 60 * 60
 FUTURE_TOLERANCE_SECONDS = 5 * 60
@@ -33,6 +34,8 @@ def canonical_endpoint_url(value: str) -> str:
 class EndpointAuthorization(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
+    signing_domain: ClassVar[str] = ENDPOINT_AUTHORIZATION_DOMAIN
+
     version: int = Field(ge=1, le=1)
     root_fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     controller_public_key_multibase: str = Field(min_length=2, max_length=128)
@@ -48,7 +51,7 @@ class EndpointAuthorization(BaseModel):
         canonical = json.dumps(
             self.model_dump(), ensure_ascii=False, separators=(",", ":"), sort_keys=True
         )
-        return f"{ENDPOINT_AUTHORIZATION_DOMAIN}\n{canonical}"
+        return f"{self.signing_domain}\n{canonical}"
 
     def digest(self) -> str:
         return hashlib.sha256(self.signing_payload().encode("utf-8")).hexdigest()
@@ -100,3 +103,32 @@ class SignedEndpointAuthorization(BaseModel):
             controller, claim.signing_payload(), self.signature_multibase
         ):
             raise ValueError("Invalid endpoint authorization signature")
+
+
+class NativeEndpointAuthorization(EndpointAuthorization):
+    signing_domain: ClassVar[str] = "agent-commons:native-interface:v1"
+
+    transport: Literal["JSONRPC"]
+    protocol_version: Literal["1.0"]
+    legacy_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class SignedNativeEndpointAuthorization(SignedEndpointAuthorization):
+    authorization: NativeEndpointAuthorization
+
+    def verify_binding(self, legacy: EndpointAuthorization, *, card_url: str, now: datetime):
+        self.verify(
+            root=legacy.root_fingerprint,
+            controller=legacy.controller_public_key_multibase,
+            identity_sequence=legacy.identity_sequence,
+            card_url=card_url,
+            a2a_url=legacy.a2a_url,
+            transport=legacy.transport,
+            now=now,
+        )
+        claim = self.authorization
+        if (
+            claim.location_sequence != legacy.location_sequence
+            or claim.legacy_digest != legacy.digest()
+        ):
+            raise ValueError("Native interface does not match the current sovereign location")
