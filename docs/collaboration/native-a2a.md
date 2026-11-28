@@ -25,7 +25,7 @@ The wheel needs no additional runtime dependency.
    `--native-card-url` to the ordinary `publish-card` command. Both Card
    versions use the exact same canonical HTTPS JSON-RPC `/a2a` endpoint.
    The native proof binds its Card URL, protocol version, binding, sovereign
-   root, controller, identity/location epochs and the digest of the current
+   root, controller, recipient account UUID, identity/location epochs and the digest of the current
    signed 0.3 location. Renew both proofs on rotation, move or expiry.
 4. The receiving operator explicitly approves a typed grant with
    `--scope a2a/1.0` and precise method/skill scopes. Add `--scope tasks/list`

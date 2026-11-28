@@ -110,13 +110,16 @@ class NativeEndpointAuthorization(EndpointAuthorization):
 
     transport: Literal["JSONRPC"]
     protocol_version: Literal["1.0"]
+    recipient_agent_id: str = Field(pattern=r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
     legacy_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class SignedNativeEndpointAuthorization(SignedEndpointAuthorization):
     authorization: NativeEndpointAuthorization
 
-    def verify_binding(self, legacy: EndpointAuthorization, *, card_url: str, now: datetime):
+    def verify_binding(
+        self, legacy: EndpointAuthorization, *, card_url: str, recipient: str, now: datetime
+    ) -> None:
         self.verify(
             root=legacy.root_fingerprint,
             controller=legacy.controller_public_key_multibase,
@@ -130,5 +133,6 @@ class SignedNativeEndpointAuthorization(SignedEndpointAuthorization):
         if (
             claim.location_sequence != legacy.location_sequence
             or claim.legacy_digest != legacy.digest()
+            or claim.recipient_agent_id != recipient
         ):
             raise ValueError("Native interface does not match the current sovereign location")

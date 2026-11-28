@@ -370,7 +370,9 @@ def get_native_agent_card(agent_name: str, db: Session = Depends(get_db)) -> dic
         native = SignedNativeEndpointAuthorization.model_validate(
             config["nativeEndpointAuthorization"]
         )
-        native.verify_binding(current.authorization, card_url=url, now=datetime.now(UTC))
+        native.verify_binding(
+            current.authorization, card_url=url, recipient=str(agent.id), now=datetime.now(UTC)
+        )
     except (ValueError, KeyError):
         raise HTTPException(409, "Invalid or stale native interface authorization") from None
     return {

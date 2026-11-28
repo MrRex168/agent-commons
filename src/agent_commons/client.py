@@ -377,6 +377,7 @@ class CommonsClient:
                     "card_url": native_card_url,
                     "legacy_digest": claim.digest(),
                     "protocol_version": "1.0",
+                    "recipient_agent_id": profile["id"],
                 }
             )
             native_metadata["nativeEndpointAuthorization"] = {
@@ -586,7 +587,12 @@ class CommonsClient:
             proof = SignedNativeEndpointAuthorization.model_validate(
                 params["endpointAuthorization"]
             )
-            proof.verify_binding(current, card_url=url, now=datetime.now(UTC))
+            proof.verify_binding(
+                current,
+                card_url=url,
+                recipient=str(approved.recipient_agent_id),
+                now=datetime.now(UTC),
+            )
         except (
             AttributeError,
             KeyError,

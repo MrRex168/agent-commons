@@ -9,7 +9,7 @@ from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import version
 from time import sleep
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -386,7 +386,7 @@ def test_native_sdk_over_loopback(tmp_path, monkeypatch):
                     card["supportedInterfaces"][0]["protocolVersion"] = "0.3.0"
                 elif mismatch == "epoch":
                     proof["authorization"]["location_sequence"] += 1
-                else:
+                elif mismatch == "signature":
                     proof["signature_multibase"] = "zFake"
                 return json.dumps(card).encode()
 
@@ -394,6 +394,19 @@ def test_native_sdk_over_loopback(tmp_path, monkeypatch):
                 patch.setattr(outbound_https, "request", corrupt)
                 with pytest.raises(EndpointVerificationError):
                     client.get_task_status(task.reference, grant=grant)
+        assert bearer_calls == []
+
+        wrong_recipient = grant.model_copy(
+            update={
+                "destination": grant.destination.model_copy(update={"recipient_agent_id": uuid4()})
+            }
+        )
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                outbound_https, "request", lambda url, **kw: corrupt(url, mismatch=None, **kw)
+            )
+            with pytest.raises(EndpointVerificationError):
+                client.get_task_status(task.reference, grant=wrong_recipient)
         assert bearer_calls == []
 
         def invalid_reply(url, **kwargs):
@@ -412,7 +425,6 @@ def test_native_sdk_over_loopback(tmp_path, monkeypatch):
 
 def test_pagination_migration_round_trip_preserves_tasks():
     from importlib import import_module
-    from uuid import uuid4
 
     from alembic.migration import MigrationContext
     from alembic.operations import Operations
