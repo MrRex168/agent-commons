@@ -37,7 +37,7 @@ from scripts.agent_internet_live_support import Server, _driver_url, isolated_da
 from scripts.collaboration_live_evidence import SUMMARY
 
 
-def backup_tool(database, *command):
+def backup_tool(database, *command, source=None, destination=None):
     # Pass the disposable role credentials in the child environment, outside argv and logs.
     subprocess.run(
         command,
@@ -49,7 +49,8 @@ def backup_tool(database, *command):
             "PGPASSWORD": database.password,
             "PGDATABASE": database.database,
         },
-        stdout=subprocess.DEVNULL,
+        stdin=source,
+        stdout=destination if destination is not None else subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=True,
         timeout=30,
@@ -58,20 +59,27 @@ def backup_tool(database, *command):
 
 def restore_database(source, destination, dump):
     try:
-        backup_tool(
-            source, "pg_dump", "--format=custom", "--no-owner", "--no-acl", "--file", str(dump)
-        )
-        backup_tool(
-            destination,
-            "pg_restore",
-            "--dbname",
-            destination.database,
-            "--exit-on-error",
-            "--single-transaction",
-            "--no-owner",
-            "--no-acl",
-            str(dump),
-        )
+        with dump.open("xb") as archive:
+            backup_tool(
+                source,
+                "pg_dump",
+                "--format=custom",
+                "--no-owner",
+                "--no-acl",
+                destination=archive,
+            )
+        with dump.open("rb") as archive:
+            backup_tool(
+                destination,
+                "pg_restore",
+                "--dbname",
+                destination.database,
+                "--exit-on-error",
+                "--single-transaction",
+                "--no-owner",
+                "--no-acl",
+                source=archive,
+            )
     finally:
         dump.unlink(missing_ok=True)
 

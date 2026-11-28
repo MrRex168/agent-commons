@@ -54,13 +54,16 @@ jobs:
       - name: Rehearse PostgreSQL backup and restore
         env:
           AGENT_COMMONS_PREVIEW_RESTORE: "1"
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
           AGENT_COMMONS_DEMO_DATABASE_URL: postgresql://agent_commons:agent_commons@127.0.0.1:5432/postgres
         run: |
-          PG_TOOLS=/usr/lib/postgresql/16/bin
-          if [ ! -x "$PG_TOOLS/pg_dump" ] || [ ! -x "$PG_TOOLS/pg_restore" ]; then
-            sudo apt-get update
-            sudo apt-get install -y postgresql-client-16
-          fi
+          PG_TOOLS="$RUNNER_TEMP/postgres-tools"
+          mkdir "$PG_TOOLS"
+          for tool in pg_dump pg_restore; do
+            printf '#!/bin/bash\nexec docker exec -i -e PGHOST=127.0.0.1 -e PGUSER -e PGPASSWORD -e PGDATABASE %q %q "$@"\n' \
+              "$POSTGRES_CONTAINER" "$tool" > "$PG_TOOLS/$tool"
+            chmod 700 "$PG_TOOLS/$tool"
+          done
           export PATH="$PG_TOOLS:$PATH"
           pg_dump --version
           pg_restore --version
