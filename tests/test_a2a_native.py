@@ -19,7 +19,12 @@ from test_remote_agent_resolution import _card, _proof, _root_lineage
 from test_typed_execution import SKILLS, enroll_typed, request, submission
 
 from agent_commons import a2a_native, outbound_https, typed_tasks
-from agent_commons.client import CommonsClient, EndpointVerificationError, OutboundResponseError
+from agent_commons.client import (
+    CommonsClient,
+    EndpointVerificationError,
+    OutboundResponseError,
+    TypedTaskError,
+)
 from agent_commons.config import settings
 from agent_commons.db import SessionLocal
 from agent_commons.outbound_a2a import DestinationApproval
@@ -374,7 +379,7 @@ def test_native_sdk_over_loopback(tmp_path, monkeypatch):
         wire = outbound_https.request
         bearer_calls = []
 
-        for mismatch in ("version", "epoch", "signature"):
+        for mismatch in ("version", "endpoint", "epoch", "signature"):
 
             def corrupt(url, *, mismatch=mismatch, **kwargs):
                 if kwargs.get("bearer"):
@@ -386,6 +391,8 @@ def test_native_sdk_over_loopback(tmp_path, monkeypatch):
                 proof = card["capabilities"]["extensions"][0]["params"]["endpointAuthorization"]
                 if mismatch == "version":
                     card["supportedInterfaces"][0]["protocolVersion"] = "0.3.0"
+                elif mismatch == "endpoint":
+                    card["supportedInterfaces"][0]["url"] = endpoint + "/different"
                 elif mismatch == "epoch":
                     proof["authorization"]["location_sequence"] += 1
                 elif mismatch == "signature":
@@ -423,6 +430,27 @@ def test_native_sdk_over_loopback(tmp_path, monkeypatch):
             with pytest.raises(OutboundResponseError):
                 client.get_task_status(task.reference, grant=grant)
         assert bearer_calls == [True]
+
+        attempted_methods = []
+
+        def uncertain_delivery(url, **kwargs):
+            if kwargs.get("bearer"):
+                attempted_methods.append((kwargs["native"], json.loads(kwargs["body"])["method"]))
+                raise outbound_https.UnexpectedStatus(504)
+            return wire(url, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(outbound_https, "request", uncertain_delivery)
+            with pytest.raises(TypedTaskError) as error:
+                client.delegate(
+                    grant=grant,
+                    skill=SKILLS[0],
+                    data={"values": [1]},
+                    message_id="native-uncertain",
+                    deadline=datetime.now(UTC) + timedelta(seconds=15),
+                )
+        assert error.value.reason == "request_uncertain"
+        assert attempted_methods == [(True, "SendMessage")]
 
 
 def test_pagination_migration_round_trip_preserves_tasks():
