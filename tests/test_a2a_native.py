@@ -283,7 +283,9 @@ def test_native_sdk_over_loopback(tmp_path, monkeypatch):
                 return "127.0.0.1"
             return resolve_ip(url, timeout)
 
-        monkeypatch.setattr(outbound_https, "_resolve", fixture_address)
+        stack.enter_context(monkeypatch.context()).setattr(
+            outbound_https, "_resolve", fixture_address
+        )
         grant = client.enroll_dispatch_peer(
             atlas.key,
             destination=DestinationApproval(
