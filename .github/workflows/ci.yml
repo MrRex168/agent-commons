@@ -51,6 +51,17 @@ jobs:
       - name: Test
         run: pytest -q
 
+      - name: Rehearse PostgreSQL backup and restore
+        env:
+          AGENT_COMMONS_PREVIEW_RESTORE: "1"
+          AGENT_COMMONS_DEMO_DATABASE_URL: postgresql://agent_commons:agent_commons@127.0.0.1:5432/postgres
+        run: |
+          if ! command -v pg_dump >/dev/null || ! command -v pg_restore >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client-16
+          fi
+          pytest -q tests/test_preview_restore.py
+
       - name: Run integration demos
         env:
           AGENT_COMMONS_DATABASE_URL: ${{ env.AGENT_COMMONS_TEST_DATABASE_URL }}
@@ -113,14 +124,41 @@ jobs:
           pip install -r tests/requirements-a2a-spike.txt
           pytest -q tests/test_a2a_sdk_spike.py
 
-      - name: Smoke-test the installed onboarding CLI
+      - name: Build and verify the preview wheel
         run: |
-          pip wheel --no-deps . --wheel-dir "$RUNNER_TEMP/onboarding-dist"
-          python -m venv "$RUNNER_TEMP/onboarding-wheel"
-          "$RUNNER_TEMP/onboarding-wheel/bin/pip" install "$RUNNER_TEMP"/onboarding-dist/*.whl
-          AGENT_COMMONS_REGISTRATION_ADMISSION=invalid "$RUNNER_TEMP/onboarding-wheel/bin/agent-commons" \
+          pip install hatchling==1.29.0
+          ARTIFACTS="$RUNNER_TEMP/preview-artifacts"
+          python scripts/build_preview_wheel.py --commit "$(git rev-parse HEAD)" --output "$ARTIFACTS"
+          (cd "$ARTIFACTS" && sha256sum --check SHA256SUMS)
+          python -m venv "$RUNNER_TEMP/preview-wheel"
+          "$RUNNER_TEMP/preview-wheel/bin/pip" install "$ARTIFACTS"/*.whl
+          cd "$ARTIFACTS"
+          "$RUNNER_TEMP/preview-wheel/bin/python" - <<'PYCODE'
+          import json
+          from importlib.metadata import version
+          from pathlib import Path
+          from agent_commons.client import CommonsClient
+          from agent_commons.main import app
+          from agent_commons.typed_worker import check_isolation
+          assert version("agent-commons") == app.version == json.loads(
+              Path("release-build.json").read_text()
+          )["version"]
+          assert callable(CommonsClient.delegate)
+          check_isolation()
+          PYCODE
+          test "$("$RUNNER_TEMP/preview-wheel/bin/agent-commons" --version)" = \
+            "$(python -c 'import json; print(json.load(open("release-build.json"))["version"])')"
+          AGENT_COMMONS_REGISTRATION_ADMISSION=invalid "$RUNNER_TEMP/preview-wheel/bin/agent-commons" \
             --config "$RUNNER_TEMP/onboarding-agent" init --url https://atlas.example --name atlas
           test "$(stat -c '%a' "$RUNNER_TEMP/onboarding-agent/controller.key")" = 600
+
+      - name: Upload verified wheel for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-wheel
+          path: ${{ runner.temp }}/preview-artifacts/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Build Docker image
         run: docker build -t agent-commons:ci .

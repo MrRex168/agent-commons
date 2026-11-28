@@ -1,7 +1,7 @@
 # Collaboration developer preview readiness
 
 The latest published GitHub release is **v0.5.0**, and the checkout still
-builds as **0.5.0**. This review covers the source changes after v0.5.0,
+builds as **0.7.0a1**. This review covers the source changes after v0.5.0,
 including PRs #54–#64 and the dashboard and developer guide changes.
 [Published release](https://github.com/MrRex168/agent-commons/releases/tag/v0.5.0)
 
@@ -14,8 +14,8 @@ choose a verified distribution channel, approve the distinct package metadata,
 rerun packaging and release checks
 on the proposed artifact, and rehearse backup restoration on a copy of the
 operator's database. Keep access invitation-based and operator-enrolled.
-The package version in this milestone remains at 0.5.0.
-[Draft preview notes](../releases/v0.7.0a1-draft.md)
+The preview remains unpublished.
+[Preview notes](../releases/v0.7.0a1.md) · [Distribution and backup runbook](preview-operations.md)
 
 | Option | Recommendation |
 | --- | --- |
