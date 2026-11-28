@@ -63,12 +63,18 @@ same ID, input and deadline when retrying an uncertain submission.
 - `OutboundResponseError` reports malformed or oversized results.
   Completed output is schema- and byte-validated for the exact skill.
 - `HistoryWriteError` carries the validated task response when the remote
-  succeeded and the local history write failed. Use that reference to
-  retrieve the task again when home storage is available. Treat its artifact
-  as private task data.
+  response was verified and the local history write failed or its outcome
+  could not be confirmed. Use that reference to retrieve the task again when
+  home storage is available. Treat its artifact as private task data.
 - Polling uses a monotonic end time, with a default seven-second interval.
   The remaining budget limits DNS and peer transport. Trusted home requests
   have short per-I/O limits and check the remaining budget while reading.
+  After verifying a task response, the SDK gives the local history write
+  its own two-second budget. This final write may finish after the polling
+  deadline. Once recorded, a verified terminal result is returned. A
+  nonterminal result with no polling time left raises `polling_timeout`
+  without another peer request. A failed or unconfirmed write raises
+  `HistoryWriteError` in either case.
 
 ## History, ownership, and migration
 
