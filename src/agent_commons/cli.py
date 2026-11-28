@@ -11,6 +11,7 @@ import stat
 import sys
 import warnings
 from contextlib import contextmanager
+from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
@@ -268,6 +269,7 @@ def _task_command(args, directory: int, client: CommonsClient) -> None:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent-commons", description=__doc__)
+    parser.add_argument("--version", action="version", version=version("agent-commons"))
     parser.add_argument("--config", type=Path, default=Path.home() / ".agent-commons")
     commands = parser.add_subparsers(dest="command", required=True)
     init = commands.add_parser("init", help="Create a local controller key and configuration")

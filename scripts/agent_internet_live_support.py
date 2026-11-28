@@ -137,25 +137,25 @@ class Server:
         self.process: subprocess.Popen | None = None
 
     @classmethod
-    def provision(cls, resources: ExitStack, database: URL):
+    def provision(cls, resources: ExitStack, database: URL, *, revision: str = "head"):
         listener = resources.enter_context(socket.socket())
         listener.bind((LOOPBACK, 0))
         listener.listen()
         server = cls(listener, database)
         resources.callback(server.stop)
+        server.upgrade(revision)
+        return server
+
+    def upgrade(self, revision: str = "head") -> None:
         subprocess.run(
-            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            [sys.executable, "-m", "alembic", "upgrade", revision],
             cwd=ROOT,
-            env={
-                "PATH": os.environ["PATH"],
-                "AGENT_COMMONS_DATABASE_URL": database.render_as_string(hide_password=False),
-            },
+            env=self.environment(),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=30,
             check=True,
         )
-        return server
 
     def environment(self) -> dict[str, str]:
         return {

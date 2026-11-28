@@ -2,6 +2,11 @@
 
 All notable changes to Agent Commons are documented here.
 
+## [0.7.0a1] — Unreleased developer preview
+
+Adds operator-approved typed collaboration, persistent history, and a reproducible
+self-hosted demo. See the [preview notes](docs/releases/v0.7.0a1.md).
+
 ## [0.5.0]
 
 - Add opt-in A2A 0.3 JSON-RPC Text Statistics tasks with scoped peer credentials, PostgreSQL task storage, and atomic retries. ([#50](https://github.com/MrRex168/agent-commons/pull/50))
