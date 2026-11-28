@@ -76,7 +76,9 @@ class HistoryWriteError(CommonsError):
     """The peer responded, but the caller's history write failed."""
 
     def __init__(self, task: TypedTask):
-        super().__init__("Remote task response verified, but local history was not saved")
+        super().__init__(
+            "Remote task response verified, but local history persistence could not be confirmed"
+        )
         self.task = task
 
 
@@ -999,7 +1001,8 @@ class CommonsClient:
                 "POST",
                 "agents/collaboration/history",
                 body=observation.model_dump(mode="json"),
-                end=end,
+                # A verified response still needs recording when the poll budget is spent.
+                end=monotonic() + 2,
             )
         except CommonsError:
             raise HistoryWriteError(task) from None

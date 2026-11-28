@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -17,7 +18,13 @@ from test_onboarding import transport_for
 from test_peer_grants import AUDIENCE, call
 from test_remote_agent_resolution import _card, _proof, _root_lineage
 
-from agent_commons import collaboration_history, outbound_https, remote_resolution, typed_worker
+from agent_commons import (
+    client,
+    collaboration_history,
+    outbound_https,
+    remote_resolution,
+    typed_worker,
+)
 from agent_commons.a2a import A2AAgentExtension
 from agent_commons.client import (
     CommonsClient,
@@ -245,9 +252,18 @@ def test_history_pagination_privacy_retention_and_concurrent_terminal_updates(li
 def test_typed_polling_deadline_and_invalid_artifact(linked, monkeypatch):
     sdk, grant, _, _, _, _, _, _ = linked
     task = sdk.delegate(**arguments(grant))
+    clock = 0.0
+
+    def sleep(seconds):
+        nonlocal clock
+        clock += seconds
+
+    monkeypatch.setattr(client, "monotonic", lambda: clock)
+    monkeypatch.setattr(client, "sleep", sleep)
     with pytest.raises(TypedTaskError) as error:
-        sdk.wait_for_task(task.reference, grant=grant, timeout=0.07)
+        sdk.wait_for_task(task.reference, grant=grant, timeout=1)
     assert error.value.reason == "polling_timeout"
+    assert clock == 1
 
     def malformed(_url, *, body, **_kwargs):
         return json.dumps(
@@ -267,6 +283,81 @@ def test_typed_polling_deadline_and_invalid_artifact(linked, monkeypatch):
     monkeypatch.setattr(outbound_https, "request", malformed)
     with pytest.raises(OutboundResponseError, match="invalid typed task or artifact"):
         sdk.get_task_status(task.reference, grant=grant)
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "before_remote",
+        "after_verified",
+        "during_history",
+        "terminal",
+        "history_timeout",
+        "uncertain",
+    ],
+)
+def test_polling_deadline_and_history_boundary(linked, monkeypatch, phase):
+    sdk, grant, _, _, _, _, _, calls = linked
+    submitted = sdk.delegate(**arguments(grant))
+    if phase == "terminal":
+        assert typed_worker.run_once()
+    clock = 0.0
+    history_writes = 0
+    monkeypatch.setattr(client, "monotonic", lambda: clock)
+    transport = outbound_https.request
+    decode = client.decode_task
+    stream = sdk._http.stream
+
+    def remote_request(*args, **kwargs):
+        if phase == "uncertain":
+            raise outbound_https.TransferError("Test connection failure")
+        return transport(*args, **kwargs)
+
+    def decode_task(*args, **kwargs):
+        nonlocal clock
+        decoded = decode(*args, **kwargs)
+        if phase == "after_verified":
+            clock = 1
+        return decoded
+
+    @contextmanager
+    def home_request(method, url, **kwargs):
+        nonlocal clock, history_writes
+        with stream(method, url, **kwargs) as reply:
+            if phase == "before_remote" and url == "agents/me/identity":
+                clock = 1
+            if url == "agents/collaboration/history":
+                assert reply.status_code == 200
+                assert kwargs["timeout"] == 2
+                history_writes += 1
+                if phase in ("during_history", "terminal"):
+                    clock = 1
+                elif phase == "history_timeout":
+                    clock = 2
+            yield reply
+
+    monkeypatch.setattr(outbound_https, "request", remote_request)
+    monkeypatch.setattr(client, "decode_task", decode_task)
+    monkeypatch.setattr(sdk._http, "stream", home_request)
+    if phase == "terminal":
+        result = sdk.wait_for_task(submitted.reference, grant=grant, timeout=1)
+        assert result.status == "completed"
+    elif phase == "history_timeout":
+        with pytest.raises(HistoryWriteError) as error:
+            sdk.wait_for_task(submitted.reference, grant=grant, timeout=1)
+        assert error.value.task == submitted
+    else:
+        with pytest.raises(TypedTaskError) as error:
+            sdk.wait_for_task(submitted.reference, grant=grant, timeout=1)
+        assert error.value.reason == (
+            "request_uncertain" if phase == "uncertain" else "polling_timeout"
+        )
+    if phase in ("before_remote", "uncertain"):
+        assert calls == ["message/send"]
+        assert history_writes == 0
+    else:
+        assert calls == ["message/send", "tasks/get"]
+        assert history_writes == 1
 
 
 def test_history_migration_round_trip_preserves_agents():
