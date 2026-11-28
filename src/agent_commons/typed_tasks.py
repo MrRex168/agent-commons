@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from pydantic import Field, ValidationError
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, select, text, tuple_
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -187,19 +187,77 @@ def _reserve(db: Session, grant: PeerGrant, approval: PeerApproval, raw: object)
     return task.result
 
 
-def _read_or_cancel(db: Session, approval: PeerApproval, rpc: RPCRequest) -> dict:
-    task_id = UUID(GetParams.model_validate(rpc.params).id)
-    query = select(A2ATask).where(
-        A2ATask.id == task_id,
+class ListParams(StrictModel):
+    pageSize: int = Field(default=20, ge=0, le=100)
+    pageToken: str = Field(default="", max_length=36)
+    contextId: str = Field(default="", max_length=36)
+    status: (
+        Literal["submitted", "working", "completed", "failed", "canceled", "rejected"] | None
+    ) = None
+    historyLength: int = Field(default=0, ge=0)
+    statusTimestampAfter: str | None = Field(default=None, max_length=40)
+    includeArtifacts: bool = False
+
+
+def _owned_tasks(approval: PeerApproval):
+    return select(A2ATask).where(
         A2ATask.caller_root == approval.caller_root,
         A2ATask.recipient_agent_id == approval.recipient_agent_id,
         A2ATask.expires_at > func.clock_timestamp(),
         A2ATask.skill.in_(approval.skill_scopes),
     )
+
+
+def _list_tasks(db: Session, approval: PeerApproval, raw: object) -> dict:
+    params = ListParams.model_validate(raw)
+    query = _owned_tasks(approval)
+    if params.contextId:
+        query = query.where(A2ATask.id == UUID(params.contextId))
+    if params.status:
+        query = query.where(A2ATask.state == params.status)
+    if params.statusTimestampAfter:
+        boundary = datetime.fromisoformat(params.statusTimestampAfter)
+        if boundary.utcoffset() is None:
+            raise ValueError("Timestamp requires an offset")
+        query = query.where(A2ATask.updated_at > boundary)
+    total = db.scalar(select(func.count()).select_from(query.subquery()))
+    if params.pageToken:
+        anchor = db.scalar(query.where(A2ATask.id == UUID(params.pageToken)))
+        if anchor is None:
+            raise RPCError(-32602, "Invalid task page cursor")
+        query = query.where(tuple_(A2ATask.updated_at, A2ATask.id) < (anchor.updated_at, anchor.id))
+    # The response must also fit the existing bounded HTTPS client. Structured
+    # artifacts can be up to 8 KiB each.
+    size = min(params.pageSize or 20, 1 if params.includeArtifacts else 20)
+    rows = db.scalars(
+        query.order_by(A2ATask.updated_at.desc(), A2ATask.id.desc()).limit(size + 1)
+    ).all()
+    tasks = []
+    for row in rows[:size]:
+        result = {
+            key: value
+            for key, value in row.result.items()
+            if key != "artifacts" or params.includeArtifacts
+        }
+        result["status"] = {**result["status"], "timestamp": row.updated_at.isoformat()}
+        tasks.append(result)
+    return {
+        "tasks": tasks,
+        "pageSize": len(tasks),
+        "totalSize": total,
+        "nextPageToken": str(rows[size - 1].id) if len(rows) > size else "",
+    }
+
+
+def _read_or_cancel(db: Session, approval: PeerApproval, rpc: RPCRequest, *, native=False) -> dict:
+    task_id = UUID(GetParams.model_validate(rpc.params).id)
+    query = _owned_tasks(approval).where(A2ATask.id == task_id)
     task = db.scalar(query.with_for_update() if rpc.method == "tasks/cancel" else query)
     if task is None:
         raise RPCError(-32001, "Task not found")
     if rpc.method == "tasks/cancel":
+        if native and task.state == "canceled":
+            return task.result
         if task.state not in ACTIVE:
             raise RPCError(-32002, "Task cannot be canceled")
         _terminal(task, "canceled")
@@ -226,7 +284,7 @@ def charge_invalid(token: str) -> None:
         raise HTTPException(503, "A2A task storage is unavailable") from None
 
 
-def dispatch(token: str, rpc: RPCRequest) -> dict:
+def dispatch(token: str, rpc: RPCRequest, *, native: bool = False) -> dict:
     failure = None
     try:
         with SessionLocal.begin() as db:
@@ -248,15 +306,22 @@ def dispatch(token: str, rpc: RPCRequest) -> dict:
                 db=db,
             )
             try:
-                if rpc.method not in ("message/send", "tasks/get", "tasks/cancel"):
+                methods = {"message/send", "tasks/get", "tasks/cancel"}
+                if native:
+                    methods.add("tasks/list")
+                if rpc.method not in methods:
                     raise RPCError(-32601, "Method not found")
-                if rpc.method not in approval.scopes:
+                if rpc.method not in approval.scopes or (
+                    native and "a2a/1.0" not in approval.scopes
+                ):
                     raise HTTPException(403, "Credential is not authorized for this A2A method")
                 consume("tasks", settings.preview_tasks_per_second, 1, db=db)
                 if rpc.method == "message/send":
                     result = _reserve(db, grant, approval, rpc.params)
+                elif rpc.method == "tasks/list":
+                    result = _list_tasks(db, approval, rpc.params)
                 else:
-                    result = _read_or_cancel(db, approval, rpc)
+                    result = _read_or_cancel(db, approval, rpc, native=native)
             except (RPCError, HTTPException, ValueError) as exc:
                 # Charge authenticated invalid attempts. Database errors still
                 # roll back all admission state, including quota charges.

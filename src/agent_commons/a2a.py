@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -17,6 +19,11 @@ from agent_commons.a2a_identity import (
 from agent_commons.collaboration import EXTENSION_PREFIX, EXTENSION_URI, advertised_skill
 from agent_commons.config import settings
 from agent_commons.db import get_db
+from agent_commons.endpoint_authorization import (
+    NATIVE_ENDPOINT_EXTENSION_URI,
+    SignedEndpointAuthorization,
+    SignedNativeEndpointAuthorization,
+)
 from agent_commons.models import Agent
 from agent_commons.profile_models import AgentStructuredProfile
 
@@ -166,7 +173,9 @@ def _extensions(
         ) from exc
 
     if any(
-        item.uri.startswith((SOVEREIGN_EXTENSION_PREFIX, EXTENSION_PREFIX)) for item in extensions
+        item.uri.startswith((SOVEREIGN_EXTENSION_PREFIX, EXTENSION_PREFIX))
+        or item.uri == NATIVE_ENDPOINT_EXTENSION_URI
+        for item in extensions
     ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -332,3 +341,74 @@ def get_well_known_agent_card(
             detail="Configured default A2A agent was not found",
         )
     return build_agent_card(agent, db)
+
+
+@router.get("/{agent_name}/agent-card/v1")
+def get_native_agent_card(agent_name: str, db: Session = Depends(get_db)) -> dict:
+    if not settings.a2a_native:
+        raise HTTPException(404, "Native A2A is disabled")
+    agent = db.scalar(select(Agent).where(Agent.name == agent_name))
+    if agent is None or not (keys := settings.collaboration_skills.get(agent.id)):
+        raise HTTPException(404, "No native interface configured")
+    _, config = _profile_and_config(agent, db)
+    if "nativeEndpointAuthorization" not in config:
+        raise HTTPException(404, "No native interface configured")
+
+    legacy = build_agent_card(agent, db)
+    url = settings.api_url + "/api/v1/agents/" + quote(agent.name, safe="") + "/agent-card/v1"
+    try:
+        (extension,) = [
+            ext
+            for ext in legacy.capabilities.extensions or ()
+            if ext.uri == SOVEREIGN_ENDPOINT_EXTENSION_URI
+        ]
+        if legacy.url != settings.api_url + "/a2a" or extension.params is None:
+            raise ValueError
+        current = SignedEndpointAuthorization.model_validate(
+            extension.params["endpointAuthorization"]
+        )
+        native = SignedNativeEndpointAuthorization.model_validate(
+            config["nativeEndpointAuthorization"]
+        )
+        native.verify_binding(
+            current.authorization, card_url=url, recipient=str(agent.id), now=datetime.now(UTC)
+        )
+    except (ValueError, KeyError):
+        raise HTTPException(409, "Invalid or stale native interface authorization") from None
+    return {
+        "name": legacy.name,
+        "description": legacy.description,
+        "version": legacy.version,
+        "supportedInterfaces": [
+            {"url": legacy.url, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}
+        ],
+        "capabilities": {
+            "extensions": [
+                {
+                    "uri": NATIVE_ENDPOINT_EXTENSION_URI,
+                    "required": False,
+                    "params": {"endpointAuthorization": native.model_dump()},
+                },
+                {
+                    "uri": SOVEREIGN_ENDPOINT_EXTENSION_URI,
+                    "required": False,
+                    "params": extension.params,
+                },
+            ]
+        },
+        "securitySchemes": {"peer": {"httpAuthSecurityScheme": {"scheme": "bearer"}}},
+        "securityRequirements": [{"schemes": {"peer": {"list": []}}}],
+        "defaultInputModes": ["application/json"],
+        "defaultOutputModes": ["application/json"],
+        "skills": [
+            {
+                "id": key,
+                "name": key,
+                "description": advertised_skill(key)["description"],
+                "tags": ["typed"],
+                "inputModes": ["application/json"],
+                "outputModes": ["application/json"],
+            }
+            for key in keys
+        ],
+    }

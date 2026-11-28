@@ -123,13 +123,13 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Test the upstream A2A SDK compatibility spike
+      - name: Test the upstream A2A 0.3 and 1.0 SDK
         env:
           AGENT_COMMONS_A2A_SDK_SPIKE: "1"
           AGENT_COMMONS_DEMO_DATABASE_URL: postgresql://agent_commons:agent_commons@127.0.0.1:5432/postgres
         run: |
           pip install -r tests/requirements-a2a-spike.txt
-          pytest -q tests/test_a2a_sdk_spike.py
+          pytest -q tests/test_a2a_sdk_spike.py tests/test_a2a_native.py -k "spike or sdk_over_loopback"
 
       - name: Build and verify the preview wheel
         run: |

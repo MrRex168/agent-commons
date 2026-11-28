@@ -198,7 +198,7 @@ def _operator_peer(args) -> None:
 def _enroll_peer(args, directory: int, key: Ed25519PrivateKey, account: LocalAccount) -> None:
     bound_options = (args.reference, args.peer_root, args.peer_controller, args.endpoint)
     options = {"skills": args.skill} if args.skill is not None else {}
-    if any(bound_options):
+    if any(bound_options) or args.native_card_url:
         if not all(bound_options):
             raise CommonsError("Provide the reference, peer root, controller and endpoint together")
         destination = DestinationApproval(
@@ -207,6 +207,7 @@ def _enroll_peer(args, directory: int, key: Ed25519PrivateKey, account: LocalAcc
             controller=args.peer_controller,
             recipient_agent_id=args.recipient,
             endpoint=args.endpoint,
+            native_card_url=args.native_card_url,
         )
         if args.url != destination.audience:
             raise CommonsError("Enrollment URL must match the approved task origin")
@@ -286,6 +287,7 @@ def _parser() -> argparse.ArgumentParser:
     card = commands.add_parser("publish-card", help="Publish a controller-authorized Agent Card")
     card.add_argument("--card-url", required=True)
     card.add_argument("--endpoint", required=True)
+    card.add_argument("--native-card-url")
     card.add_argument("--location-sequence", type=int, required=True)
     card.add_argument("--transport", choices=["JSONRPC", "GRPC", "HTTP+JSON"], default="JSONRPC")
     resolve = commands.add_parser("resolve", help="Resolve a known peer Card through the server")
@@ -304,6 +306,7 @@ def _parser() -> argparse.ArgumentParser:
     enroll.add_argument("--peer-root")
     enroll.add_argument("--peer-controller")
     enroll.add_argument("--endpoint")
+    enroll.add_argument("--native-card-url")
     for command in (approve, enroll):
         command.add_argument(
             "--skill", action="append", help="Exact typed skill such as analysis.summary@1"
@@ -314,7 +317,7 @@ def _parser() -> argparse.ArgumentParser:
             "--scope",
             required=True,
             action="append",
-            choices=["message/send", "tasks/get", "tasks/cancel"],
+            choices=["message/send", "tasks/get", "tasks/cancel", "tasks/list", "a2a/1.0"],
         )
     for name in ("peer-rotate", "peer-revoke"):
         command = commands.add_parser(name)
@@ -368,6 +371,7 @@ def run(args) -> None:
                         endpoint=args.endpoint,
                         location_sequence=args.location_sequence,
                         transport=args.transport,
+                        native_card_url=args.native_card_url,
                     )
                     print(f"Agent Card authorization published for {root}")
                 case "resolve":

@@ -127,6 +127,7 @@ def _transfer(
     ca_file: str,
     body: bytes | None = None,
     bearer: str | None = None,
+    native: bool = False,
 ) -> bytes:
     if timeout <= 0:
         raise TransferError("Outbound HTTPS request timed out")
@@ -147,6 +148,8 @@ def _transfer(
     headers = ["Accept: application/json", "Accept-Encoding: identity"]
     if body is not None:
         headers.append("Content-Type: application/json")
+    if native:
+        headers.append("A2A-Version: 1.0")
     if bearer is not None:
         headers.append("Authorization: Bearer " + bearer)
 
@@ -197,6 +200,7 @@ def request(
     body: bytes | None = None,
     bearer: str | None = None,
     valid_until: datetime | None = None,
+    native: bool = False,
 ) -> bytes:
     if body is not None and len(body) > MAX_REQUEST_BYTES:
         raise TransferError("Outbound request exceeds the size limit")
@@ -227,6 +231,7 @@ def request(
             ca_file=certifi.where(),
             body=body,
             bearer=bearer,
+            **({"native": True} if native else {}),
         )
     finally:
         SLOTS.release()

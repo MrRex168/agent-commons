@@ -97,7 +97,14 @@ def approve_peer(
     allowed = {"message/send", "tasks/get"}
     if skills is not None:
         allowed.add("tasks/cancel")
-    if not scopes or not set(scopes) <= allowed or not 1 <= lifetime_hours <= 24:
+        if settings.a2a_native:
+            allowed.update(("a2a/1.0", "tasks/list"))
+    if (
+        not scopes
+        or not set(scopes) <= allowed
+        or ("tasks/list" in scopes and "a2a/1.0" not in scopes)
+        or not 1 <= lifetime_hours <= 24
+    ):
         raise ValueError("Specify allowed methods and a grant lifetime of 1–24 hours")
     approval = db.scalar(
         select(PeerApproval)

@@ -6,6 +6,7 @@ import json
 import re
 import secrets
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from threading import BoundedSemaphore
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
@@ -114,9 +115,9 @@ def _reject_constant(value: str) -> None:
     raise ValueError("Invalid JSON number")
 
 
-async def _read_json(request: Request) -> object:
+async def _read_json(request: Request, *, native: bool = False) -> object:
     media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-    if media_type != "application/json":
+    if media_type != "application/json" and not (native and media_type == "application/a2a+json"):
         raise HTTPException(415, "Expected application/json")
     if request.headers.get("content-encoding", "identity") != "identity":
         raise HTTPException(415, "Encoded request bodies are unsupported")
@@ -140,9 +141,12 @@ async def _read_json(request: Request) -> object:
 
     try:
         return json.loads(
-            body.decode("utf-8"), object_pairs_hook=_unique_object, parse_constant=_reject_constant
+            body.decode("utf-8"),
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_constant,
+            parse_float=Decimal if native else None,
         )
-    except (ValueError, RecursionError) as exc:
+    except (ValueError, RecursionError, InvalidOperation) as exc:
         raise RPCError(-32700, "Parse error") from exc
 
 
@@ -277,6 +281,28 @@ async def _preview_peer(request: Request) -> A2ATaskPeer:
 
 @router.post("/a2a", response_model=None)
 async def run_a2a_task(request: Request) -> dict | JSONResponse:
+    versions = request.headers.getlist("a2a-version")
+    version = versions[0] if len(versions) == 1 else ""
+    native = version == "1.0" and settings.a2a_native
+    if len(versions) > 1 or (version not in ("", "0.3", "0.3.0") and not native):
+        if not REQUEST_SLOTS.acquire(blocking=False):
+            raise HTTPException(503, "A2A runtime is busy")
+        try:
+            try:
+                unsupported = RPCRequest.model_validate(await _read_json(request, native=True))
+                if isinstance(unsupported.id, str):
+                    unsupported.id.encode("utf-8")
+            except (ValidationError, UnicodeEncodeError):
+                raise RPCError(-32600, "Invalid request") from None
+            return {
+                "jsonrpc": "2.0",
+                "id": unsupported.id,
+                "error": {"code": -32009, "message": "Unsupported A2A version"},
+            }
+        except RPCError as exc:
+            return {"jsonrpc": "2.0", "id": None, "error": {"code": exc.code, "message": str(exc)}}
+        finally:
+            REQUEST_SLOTS.release()
     preview = settings.preview_limits
     typed = False
     if settings.collaboration_execution:
@@ -296,18 +322,27 @@ async def run_a2a_task(request: Request) -> dict | JSONResponse:
                     )
                     is None
                 ):
-                    raise HTTPException(401, "Invalid A2A peer credential")
+                    raise HTTPException(
+                        401, "Invalid A2A peer credential", headers={"WWW-Authenticate": "Bearer"}
+                    )
             finally:
                 PREVIEW_AUTH_SLOTS.release()
+    if native and not typed:
+        raise HTTPException(
+            401,
+            "Native A2A requires a typed peer credential",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     peer = await _preview_peer(request) if preview and not typed else None
     if not REQUEST_SLOTS.acquire(blocking=False):
         raise HTTPException(503, "A2A runtime is busy")
     request_id = None
+    dispatched = False
     try:
         if peer is None and not typed:
             peer = await _authenticate(request)
         try:
-            raw = await _read_json(request)
+            raw = await _read_json(request, native=native)
         except HTTPException:
             if typed:
                 await run_in_threadpool(typed_tasks.charge_invalid, token)
@@ -320,7 +355,15 @@ async def run_a2a_task(request: Request) -> dict | JSONResponse:
             raise RPCError(-32600, "Invalid request") from exc
         request_id = rpc.id
         if typed:
-            result = await run_in_threadpool(typed_tasks.dispatch, token, rpc)
+            if native:
+                from agent_commons.a2a_native import decode_request, encode_result
+
+                rpc = decode_request(rpc)
+                dispatched = True
+                result = await run_in_threadpool(typed_tasks.dispatch, token, rpc, native=True)
+                result = encode_result(rpc.method, result)
+            else:
+                result = await run_in_threadpool(typed_tasks.dispatch, token, rpc)
             return {"jsonrpc": "2.0", "id": request_id, "result": result}
         if preview and rpc.method in peer.scopes:
             try:
@@ -340,7 +383,7 @@ async def run_a2a_task(request: Request) -> dict | JSONResponse:
         result = await run_in_threadpool(_dispatch, peer, rpc)
         return {"jsonrpc": "2.0", "id": request_id, "result": result}
     except RPCError as exc:
-        if typed and request_id is None:
+        if typed and (request_id is None or (native and not dispatched)):
             await run_in_threadpool(typed_tasks.charge_invalid, token)
         return {
             "jsonrpc": "2.0",

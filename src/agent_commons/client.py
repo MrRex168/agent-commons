@@ -6,6 +6,7 @@ import math
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from time import monotonic, sleep
 from typing import Annotated, Literal
 from urllib.parse import urlencode, urlsplit
@@ -16,12 +17,15 @@ import httpx
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from pydantic import BaseModel, Field, TypeAdapter
 
-from agent_commons import outbound_https
+from agent_commons import a2a_native, outbound_https
 from agent_commons.collaboration import SkillScopes, _unique_object, validate_typed_request
 from agent_commons.endpoint_authorization import (
+    NATIVE_ENDPOINT_EXTENSION_URI,
     SOVEREIGN_ENDPOINT_EXTENSION_URI,
     EndpointAuthorization,
+    NativeEndpointAuthorization,
     SignedEndpointAuthorization,
+    SignedNativeEndpointAuthorization,
     canonical_endpoint_url,
 )
 from agent_commons.identity_crypto import ED25519_MULTICODEC_PREFIX, identity_fingerprint
@@ -41,6 +45,7 @@ from agent_commons.typed_client_models import (
     CollaborationObservation,
     CollaborationPage,
     KnownPeerPage,
+    NativeTaskPage,
     TypedTask,
     TypedTaskRef,
     decode_task,
@@ -305,6 +310,7 @@ class CommonsClient:
         endpoint: str,
         location_sequence: int,
         transport: Literal["JSONRPC", "GRPC", "HTTP+JSON"] = "JSONRPC",
+        native_card_url: str | None = None,
     ) -> str:
         card_url = canonical_endpoint_url(card_url)
         endpoint = canonical_endpoint_url(endpoint)
@@ -354,6 +360,31 @@ class CommonsClient:
                 raise CommonsError(
                     "Use a location sequence greater than the existing authorization"
                 )
+        native_metadata = {}
+        if native_card_url is not None:
+            if (
+                transport != "JSONRPC"
+                or endpoint != self.origin + "/a2a"
+                or not native_card_url.startswith(self.origin + "/api/v1/agents/")
+                or not native_card_url.endswith("/agent-card/v1")
+                or canonical_endpoint_url(native_card_url) != native_card_url
+                or "?" in native_card_url
+            ):
+                raise CommonsError("Use the exact native Card and JSON-RPC task URL")
+            native = NativeEndpointAuthorization.model_validate(
+                {
+                    **claim.model_dump(),
+                    "card_url": native_card_url,
+                    "legacy_digest": claim.digest(),
+                    "protocol_version": "1.0",
+                    "recipient_agent_id": profile["id"],
+                }
+            )
+            native_metadata["nativeEndpointAuthorization"] = {
+                "authorization": native.model_dump(),
+                "signature_multibase": _sign(key, native.signing_payload()),
+            }
+
         self._request(
             "Card publication",
             "PUT",
@@ -362,7 +393,8 @@ class CommonsClient:
                 "metadata": {
                     **metadata,
                     "a2a": {
-                        **a2a,
+                        **{k: v for k, v in a2a.items() if k != "nativeEndpointAuthorization"},
+                        **native_metadata,
                         "url": endpoint,
                         "preferredTransport": transport,
                         "publishSovereignIdentity": True,
@@ -413,7 +445,7 @@ class CommonsClient:
         fields = (audience, caller_root, recipient_agent_id, sorted(set(scopes)))
         allowed = {"message/send", "tasks/get"}
         if skills is not None:
-            allowed.add("tasks/cancel")
+            allowed.update(("tasks/cancel", "tasks/list", "a2a/1.0"))
         if not scopes or not set(scopes) <= allowed:
             raise CommonsError("Specify the expected task method scopes")
         if skills is not None:
@@ -527,6 +559,53 @@ class CommonsClient:
             ) from None
         return signed.authorization
 
+    def _verify_native_destination(
+        self,
+        approved: DestinationApproval,
+        current: EndpointAuthorization,
+        *,
+        end: float | None = None,
+    ) -> NativeEndpointAuthorization:
+        url = approved.native_card_url
+        if url is None:
+            raise EndpointVerificationError("No native Card was approved")
+        expiry = current.expiration()
+        if end is not None:
+            expiry = min(expiry, datetime.now(UTC) + timedelta(seconds=_remaining(end)))
+        try:
+            raw = outbound_https.request(url, response_limit=512 * 1024, valid_until=expiry)
+            card = json.loads(raw, object_pairs_hook=_unique_object)
+            if card["supportedInterfaces"] != [
+                {"url": approved.endpoint, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}
+            ]:
+                raise ValueError
+            (params,) = [
+                extension["params"]
+                for extension in card["capabilities"]["extensions"]
+                if extension["uri"] == NATIVE_ENDPOINT_EXTENSION_URI
+            ]
+            proof = SignedNativeEndpointAuthorization.model_validate(
+                params["endpointAuthorization"]
+            )
+            proof.verify_binding(
+                current,
+                card_url=url,
+                recipient=str(approved.recipient_agent_id),
+                now=datetime.now(UTC),
+            )
+        except (
+            AttributeError,
+            KeyError,
+            TypeError,
+            ValueError,
+            RecursionError,
+            outbound_https.TransferError,
+        ) as exc:
+            raise EndpointVerificationError(
+                "Approved native interface could not be verified", getattr(exc, "status", None)
+            ) from None
+        return proof.authorization
+
     def enroll_dispatch_peer(
         self,
         key: Ed25519PrivateKey,
@@ -539,6 +618,10 @@ class CommonsClient:
     ) -> BoundGrant:
         """Verify a caller-approved reference and redeem a fresh, endpoint-bound credential."""
         claim = self._verified_destination(destination)
+        if destination.native_card_url is not None:
+            if skills is None or "a2a/1.0" not in scopes:
+                raise CommonsError("Native dispatch requires explicit typed 1.0 enrollment")
+            self._verify_native_destination(destination, claim)
         audience = destination.audience
 
         def exchange(action: str, path: str, body: dict) -> dict:
@@ -739,19 +822,16 @@ class CommonsClient:
             grant, method, {"id": str(task.id)}, skill=task.skill, reference=task, end=end
         )
 
-    def _typed_task(
+    def _typed_rpc(
         self,
         grant: BoundGrant,
         method: CollaborationMethod,
         params: dict,
         *,
-        skill: str,
-        reference: TypedTaskRef | None = None,
         end: float | None = None,
-    ) -> TypedTask:
+    ) -> tuple[EndpointAuthorization, dict]:
         if (
             not isinstance(grant.grant, SkillIssuedGrant)
-            or skill not in grant.grant.skills
             or method not in grant.grant.scopes
             or self.origin != grant.home_origin
         ):
@@ -780,15 +860,27 @@ class CommonsClient:
                 ) from None
             raise
         expiry = min(grant.expires_at, claim.expiration())
+        native = grant.destination.native_card_url is not None
+        if native:
+            if "a2a/1.0" not in grant.grant.scopes:
+                raise TypedTaskError("scope_denied", "Native dispatch requires a 1.0 grant")
+            binding = self._verify_native_destination(grant.destination, claim, end=end)
+            expiry = min(expiry, binding.expiration())
         expiry = min(expiry, datetime.now(UTC) + timedelta(seconds=_remaining(end)))
         request_id = str(uuid4())
         try:
             reply = _outbound_json(
                 "Typed task request",
                 grant.destination.endpoint,
-                {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": a2a_native.WIRE_METHODS[method] if native else method,
+                    "params": a2a_native.encode_request(method, params) if native else params,
+                },
                 bearer=grant.grant.token.get_secret_value(),
                 valid_until=expiry,
+                **({"native": True} if native else {}),
             )
         except OutboundResponseError:
             raise
@@ -825,8 +917,49 @@ class CommonsClient:
                 -32010: ("message_conflict", "Message ID was used for a different request"),
             }.get(code, ("rejected", "Peer declined the typed task request"))
             raise TypedTaskError(reason, message)
+        if "result" not in reply:
+            raise OutboundResponseError("Peer returned an invalid RPC result")
+        return claim, reply
+
+    def list_native_tasks(
+        self, grant: BoundGrant, *, page_size: int = 20, cursor: UUID | None = None
+    ) -> NativeTaskPage:
+        if grant.destination.native_card_url is None:
+            raise EndpointVerificationError("Task listing requires an approved native Card")
+        if type(page_size) is not int or not 1 <= page_size <= 20:
+            raise ValueError("Use a task page size between 1 and 20")
+        params = {"pageSize": page_size}
+        if cursor is not None:
+            params["pageToken"] = str(cursor)
+        _, reply = self._typed_rpc(grant, "tasks/list", params)
         try:
-            identifier, state, artifact = decode_task(reply["result"], skill=skill)
+            page = NativeTaskPage.model_validate(reply["result"])
+            if page.pageSize != len(page.tasks) or page.pageSize > page_size:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise OutboundResponseError("Peer returned an invalid native task page") from None
+        return page
+
+    def _typed_task(
+        self,
+        grant: BoundGrant,
+        method: CollaborationMethod,
+        params: dict,
+        *,
+        skill: str,
+        reference: TypedTaskRef | None = None,
+        end: float | None = None,
+    ) -> TypedTask:
+        if not isinstance(grant.grant, SkillIssuedGrant) or skill not in grant.grant.skills:
+            raise TypedTaskError("scope_denied", "Typed grant does not authorize this request")
+        end = min(end, monotonic() + 20) if end is not None else monotonic() + 20
+        claim, reply = self._typed_rpc(grant, method, params, end=end)
+        native = grant.destination.native_card_url is not None
+        try:
+            result = reply["result"]
+            if native:
+                result = a2a_native.decode_result(method, result, skill=skill)
+            identifier, state, artifact = decode_task(result, skill=skill)
             if reference is not None and identifier != reference.id:
                 raise ValueError
             task = TypedTask(
@@ -901,6 +1034,7 @@ def _outbound_json(
     *,
     bearer: str | None = None,
     valid_until: datetime | None = None,
+    native: bool = False,
 ) -> dict:
     try:
         raw = outbound_https.request(
@@ -909,8 +1043,11 @@ def _outbound_json(
             body=json.dumps(body, ensure_ascii=False).encode("utf-8"),
             bearer=bearer,
             valid_until=valid_until,
+            **({"native": True} if native else {}),
         )
-        result = json.loads(raw, object_pairs_hook=_unique_object)
+        result = json.loads(
+            raw, object_pairs_hook=_unique_object, parse_float=Decimal if native else None
+        )
         if not isinstance(result, dict):
             raise ValueError
         return result
@@ -926,5 +1063,5 @@ def _outbound_json(
         raise OutboundResponseError(f"{action} returned an oversized response") from None
     except outbound_https.TransferError as exc:
         raise CommonsError(f"{action} failed. {exc}") from None
-    except (ValueError, RecursionError):
+    except (ValueError, RecursionError, InvalidOperation):
         raise OutboundResponseError(f"{action} returned an invalid response") from None

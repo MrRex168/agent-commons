@@ -118,7 +118,7 @@ def get_task(client, node, token, identifier):
 def assert_drained(node):
     with psycopg.connect(_driver_url(node.database)) as db:
         assert db.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0020_collaboration_history",
+            "0021_a2a_task_pagination",
         )
         assert db.execute(
             "SELECT count(*) FROM a2a_tasks WHERE state IN ('submitted', 'working')"
